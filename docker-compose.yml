@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: vpn_user
       POSTGRES_PASSWORD: ${DB_PASSWORD:-vpn_password}
     ports:
-      - "5434:5432"
+      - "55432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
@@ -26,7 +26,7 @@ services:
     container_name: vpn-redis
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
-      - "6380:6379"
+      - "56379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -52,7 +52,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "8080:8080"
+      - "50082:8080"
     depends_on:
       postgres:
         condition: service_healthy

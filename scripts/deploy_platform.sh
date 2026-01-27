@@ -519,7 +519,7 @@ verify_deployment() {
 
     # 检查端口监听
     log_info "检查端口监听..."
-    local ports=("80" "8080" "8081" "5434" "6380")
+    local ports=("50080" "50081" "50082" "55432" "56379")
     for port in "${ports[@]}"; do
         if netstat -tuln 2>/dev/null | grep -q ":$port " || ss -tuln 2>/dev/null | grep -q ":$port "; then
             log_info "✓ 端口 $port 正在监听"
@@ -530,7 +530,7 @@ verify_deployment() {
 
     # 检查 API 健康
     log_info "检查 API 健康..."
-    if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+    if curl -sf http://localhost:50082/health > /dev/null 2>&1; then
         log_info "✓ API 健康检查通过"
     else
         log_error "✗ API 健康检查失败"
@@ -539,7 +539,7 @@ verify_deployment() {
 
     # 检查前端
     log_info "检查前端..."
-    if curl -sf http://localhost/ > /dev/null 2>&1; then
+    if curl -sf http://localhost:50080/ > /dev/null 2>&1; then
         log_info "✓ 前端访问正常"
     else
         log_error "✗ 前端访问失败"
@@ -548,7 +548,7 @@ verify_deployment() {
 
     # 检查管理后台
     log_info "检查管理后台..."
-    if curl -sf http://localhost:8081/ > /dev/null 2>&1; then
+    if curl -sf http://localhost:50081/ > /dev/null 2>&1; then
         log_info "✓ 管理后台访问正常"
     else
         log_error "✗ 管理后台访问失败"
@@ -580,9 +580,9 @@ show_deployment_info() {
         echo "  管理后台: https://admin.${DOMAIN}"
         echo "  API 服务: https://${DOMAIN}/api"
     else
-        echo "  用户前端: http://$(hostname -I | awk '{print $1}')"
-        echo "  管理后台: http://$(hostname -I | awk '{print $1}'):8081"
-        echo "  API 服务: http://$(hostname -I | awk '{print $1}'):8080"
+        echo "  用户前端: http://$(hostname -I | awk '{print $1}'):50080"
+        echo "  管理后台: http://$(hostname -I | awk '{print $1}'):50081"
+        echo "  API 服务: http://$(hostname -I | awk '{print $1}'):50082"
     fi
     echo ""
     echo "默认管理员账号:"
