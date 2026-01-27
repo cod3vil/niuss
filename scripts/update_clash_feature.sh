@@ -27,7 +27,7 @@ git pull origin main
 echo -e "${GREEN}✓ Code updated${NC}"
 echo ""
 
-# Step 2: Apply database migration
+# Step 2: Apply database migration using Docker
 echo -e "${BLUE}Step 2: Applying database migration...${NC}"
 echo -e "${YELLOW}This will create 3 new tables: clash_proxies, clash_proxy_groups, clash_rules${NC}"
 read -p "Continue? (y/n) " -n 1 -r
@@ -37,23 +37,42 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 1
 fi
 
-# Get database connection info from .env or use defaults
+# Get database info from .env or use defaults
 if [ -f .env ]; then
     source .env
 fi
 
-DB_HOST="${DATABASE_HOST:-localhost}"
-DB_PORT="${DATABASE_PORT:-55432}"
 DB_NAME="${DATABASE_NAME:-vpn_platform}"
 DB_USER="${DATABASE_USER:-postgres}"
 
-echo "Connecting to database: $DB_NAME@$DB_HOST:$DB_PORT"
-PGPASSWORD="${DATABASE_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f migrations/003_clash_config_management.sql
+echo "Running migration via Docker..."
+
+# Copy migration file to postgres container
+POSTGRES_CONTAINER=$(docker-compose ps -q postgres)
+if [ -z "$POSTGRES_CONTAINER" ]; then
+    echo -e "${RED}✗ Postgres container not found. Is docker-compose running?${NC}"
+    exit 1
+fi
+
+docker cp migrations/003_clash_config_management.sql ${POSTGRES_CONTAINER}:/tmp/migration.sql
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}✗ Failed to copy migration file to container${NC}"
+    exit 1
+fi
+
+# Execute migration
+docker-compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -f /tmp/migration.sql
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ Database migration completed${NC}"
+    # Clean up
+    docker-compose exec -T postgres rm /tmp/migration.sql 2>/dev/null || true
 else
     echo -e "${RED}✗ Database migration failed${NC}"
+    echo "Try running manually:"
+    echo "  docker cp migrations/003_clash_config_management.sql \$(docker-compose ps -q postgres):/tmp/migration.sql"
+    echo "  docker-compose exec postgres psql -U $DB_USER -d $DB_NAME -f /tmp/migration.sql"
     exit 1
 fi
 echo ""
@@ -94,7 +113,7 @@ fi
 
 # Verify database tables
 echo "Verifying database tables..."
-TABLE_COUNT=$(PGPASSWORD="${DATABASE_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name IN ('clash_proxies', 'clash_proxy_groups', 'clash_rules');")
+TABLE_COUNT=$(docker-compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name IN ('clash_proxies', 'clash_proxy_groups', 'clash_rules');")
 
 if [ "$TABLE_COUNT" -eq 3 ]; then
     echo -e "${GREEN}✓ All 3 tables created successfully${NC}"
@@ -132,5 +151,6 @@ echo "  4. Set up routing rules"
 echo "  5. Generate Clash configuration"
 echo ""
 echo -e "${BLUE}Example:${NC}"
+echo "  export ADMIN_TOKEN='your_token'"
 echo "  ./examples/clash_config_example.sh"
 echo ""

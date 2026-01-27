@@ -10,11 +10,12 @@ git pull origin main
 
 ### 2. 运行数据库迁移
 ```bash
-# 方式 A: 使用 Docker（推荐）
-docker-compose exec postgres psql -U postgres -d vpn_platform -f /migrations/003_clash_config_management.sql
+# 使用 Docker（推荐 - 不需要安装 psql）
+docker cp migrations/003_clash_config_management.sql $(docker-compose ps -q postgres):/tmp/migration.sql
+docker-compose exec postgres psql -U postgres -d vpn_platform -f /tmp/migration.sql
 
-# 方式 B: 直接连接数据库
-psql -U postgres -d vpn_platform < migrations/003_clash_config_management.sql
+# 或者一行命令
+docker-compose exec -T postgres psql -U postgres -d vpn_platform < migrations/003_clash_config_management.sql
 ```
 
 ### 3. 重启服务
