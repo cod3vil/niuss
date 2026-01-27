@@ -67,33 +67,12 @@
 
       <!-- Available Nodes -->
       <div class="bg-white shadow rounded-lg p-6">
-        <h3 class="text-lg font-medium text-gray-900 mb-4">可用节点</h3>
+        <h3 class="text-lg font-medium text-gray-900 mb-4">节点信息</h3>
         
-        <div v-if="subscriptionStore.nodes.length === 0" class="text-center py-8 text-gray-500">
-          暂无可用节点
-        </div>
-        
-        <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div
-            v-for="node in subscriptionStore.nodes"
-            :key="node.id"
-            class="border border-gray-200 rounded-lg p-4 hover:border-indigo-500 transition-colors"
-          >
-            <div class="flex items-center justify-between mb-2">
-              <h4 class="text-sm font-medium text-gray-900">{{ node.name }}</h4>
-              <span
-                class="px-2 py-1 text-xs font-semibold rounded-full"
-                :class="node.status === 'online' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'"
-              >
-                {{ node.status === 'online' ? '在线' : '离线' }}
-              </span>
-            </div>
-            <div class="space-y-1 text-xs text-gray-600">
-              <p>地址：{{ node.host }}</p>
-              <p>端口：{{ node.port }}</p>
-              <p>协议：{{ node.protocol.toUpperCase() }}</p>
-            </div>
-          </div>
+        <div class="text-sm text-gray-600 space-y-2">
+          <p>✓ 所有可用节点已包含在订阅链接中</p>
+          <p>✓ 导入订阅后，Clash 会自动获取最新的节点列表</p>
+          <p>✓ 节点会根据您的套餐自动更新</p>
         </div>
       </div>
 
@@ -165,7 +144,8 @@ const copied = ref(false)
 
 onMounted(() => {
   subscriptionStore.fetchSubscription()
-  subscriptionStore.fetchNodes()
+  // Note: Removed fetchNodes() as it calls admin API
+  // Nodes will be available through the subscription config
   userStore.fetchTraffic()
 })
 
