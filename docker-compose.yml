@@ -76,7 +76,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     container_name: vpn-frontend
     ports:
-      - "80:80"
+      - "50080:80"
     depends_on:
       - api
     networks:
@@ -91,7 +91,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     container_name: vpn-admin
     ports:
-      - "8081:80"
+      - "50081:80"
     depends_on:
       - api
     networks:
