@@ -44,6 +44,12 @@ const routes: RouteRecordRaw[] = [
         name: 'Stats',
         component: () => import('@/views/Stats.vue'),
         meta: { title: '数据统计' }
+      },
+      {
+        path: 'clash',
+        name: 'ClashConfig',
+        component: () => import('@/views/ClashConfig.vue'),
+        meta: { title: 'Clash 配置' }
       }
     ]
   },

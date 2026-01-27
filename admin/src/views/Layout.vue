@@ -31,6 +31,10 @@
           <BarChartOutlined />
           <span>数据统计</span>
         </a-menu-item>
+        <a-menu-item key="clash">
+          <ApiOutlined />
+          <span>Clash 配置</span>
+        </a-menu-item>
       </a-menu>
     </a-layout-sider>
     
@@ -78,6 +82,7 @@ import {
   UserOutlined,
   ShoppingOutlined,
   BarChartOutlined,
+  ApiOutlined,
   DownOutlined,
   LogoutOutlined
 } from '@ant-design/icons-vue'
