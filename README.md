@@ -200,6 +200,16 @@ npm run test
 
 **⚠️ 请在生产环境中立即修改默认密码！**
 
+### 如果遇到登录问题
+
+如果你已经部署了系统但遇到 "Failed to parse password hash" 错误，运行以下命令修复：
+
+```bash
+./scripts/update_admin_password.sh
+```
+
+然后使用 `admin@example.com` / `admin123` 登录。
+
 ## 开发状态
 
 当前实现了项目的基础设施搭建（任务 1）：
