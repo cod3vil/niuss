@@ -43,7 +43,7 @@ if [ -f .env ]; then
 fi
 
 DB_HOST="${DATABASE_HOST:-localhost}"
-DB_PORT="${DATABASE_PORT:-5432}"
+DB_PORT="${DATABASE_PORT:-55432}"
 DB_NAME="${DATABASE_NAME:-vpn_platform}"
 DB_USER="${DATABASE_USER:-postgres}"
 
