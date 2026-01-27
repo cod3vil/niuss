@@ -60,10 +60,10 @@ fi
 
 # 3. 重新构建和重启
 echo -e "${BLUE}[3/4] 重新构建 API 服务...${NC}"
-echo -e "${YELLOW}提示: 如果网络慢，可以按 Ctrl+C 取消，稍后手动执行${NC}"
+echo -e "${YELLOW}提示: 使用本地镜像构建，不拉取新镜像${NC}"
 sleep 2
 
-$DOCKER_COMPOSE build api
+$DOCKER_COMPOSE build --no-cache api
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ 构建完成${NC}\n"
     $DOCKER_COMPOSE up -d
