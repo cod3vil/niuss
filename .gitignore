@@ -55,3 +55,7 @@ logs/
 *.log
 tests/
 examples/
+
+# Clash configuration templates (keep local only)
+template.yaml
+template_simple.yaml
