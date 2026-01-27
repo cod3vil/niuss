@@ -3,8 +3,8 @@ target/
 **/*.rs.bk
 *.pdb
 
-# Note: Cargo.lock is committed for binary/application projects
-# It ensures reproducible builds across all environments
+# Cargo.lock is committed for reproducible builds
+# Both local (Rust 1.88) and Docker (Rust 1.88) use the same version
 
 # Node.js
 node_modules/

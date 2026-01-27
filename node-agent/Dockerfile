@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.82-alpine AS builder
+FROM rust:1.88-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache musl-dev openssl-dev
@@ -10,9 +10,6 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY api ./api
 COPY node-agent ./node-agent
-
-# Regenerate Cargo.lock if version incompatible
-RUN cargo generate-lockfile || true
 
 # Build the node-agent
 RUN cargo build --release --package node-agent
