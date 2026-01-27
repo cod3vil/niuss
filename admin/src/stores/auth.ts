@@ -5,7 +5,13 @@ import api from '@/api'
 export interface AdminUser {
   id: number
   email: string
-  role: string
+  is_admin: boolean
+  status: string
+  coin_balance?: number
+  traffic_quota?: number
+  traffic_used?: number
+  referral_code?: string | null
+  created_at?: string
 }
 
 export interface LoginRequest {
@@ -25,7 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref<string | null>(null)
 
   const isAuthenticated = computed(() => !!token.value && !!user.value)
-  const isAdmin = computed(() => user.value?.role === 'admin')
+  const isAdmin = computed(() => user.value?.is_admin === true)
 
   // Initialize from localStorage
   const init = () => {
@@ -52,7 +58,7 @@ export const useAuthStore = defineStore('auth', () => {
       const { token: authToken, user: userData } = response.data
       
       // Verify admin role
-      if (userData.role !== 'admin') {
+      if (!userData.is_admin) {
         error.value = '无管理员权限'
         return false
       }
