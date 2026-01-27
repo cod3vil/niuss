@@ -6,7 +6,7 @@
    git pull origin main
 
 2. 数据库迁移
-   docker-compose exec postgres psql -U postgres -d vpn_platform -f /migrations/003_clash_config_management.sql
+   docker-compose exec -T postgres psql -U vpn_user -d vpn_platform -f /migrations/003_clash_config_management.sql
 
 3. 重启服务
    docker-compose down && docker-compose build api && docker-compose up -d
@@ -19,7 +19,7 @@
    docker-compose ps
 
 检查表：
-   docker-compose exec postgres psql -U postgres -d vpn_platform -c "\dt clash_*"
+   docker-compose exec postgres psql -U vpn_user -d vpn_platform -c "\dt clash_*"
 
 测试 API：
    curl http://localhost:8080/health

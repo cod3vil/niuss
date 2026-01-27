@@ -12,10 +12,10 @@ git pull origin main
 ```bash
 # 使用 Docker（推荐 - 不需要安装 psql）
 docker cp migrations/003_clash_config_management.sql $(docker-compose ps -q postgres):/tmp/migration.sql
-docker-compose exec postgres psql -U postgres -d vpn_platform -f /tmp/migration.sql
+docker-compose exec postgres psql -U vpn_user -d vpn_platform -f /tmp/migration.sql
 
 # 或者一行命令
-docker-compose exec -T postgres psql -U postgres -d vpn_platform < migrations/003_clash_config_management.sql
+docker-compose exec -T postgres psql -U vpn_user -d vpn_platform < migrations/003_clash_config_management.sql
 ```
 
 ### 3. 重启服务
@@ -42,7 +42,7 @@ docker-compose ps
 
 ### 检查数据库表
 ```bash
-docker-compose exec postgres psql -U postgres -d vpn_platform -c "\dt clash_*"
+docker-compose exec postgres psql -U vpn_user -d vpn_platform -c "\dt clash_*"
 ```
 
 应该看到 3 个新表：
@@ -75,7 +75,7 @@ docker-compose logs postgres
 
 ### 回滚数据库（如果需要）
 ```bash
-docker-compose exec postgres psql -U postgres -d vpn_platform -c "
+docker-compose exec postgres psql -U vpn_user -d vpn_platform -c "
 DROP TABLE IF EXISTS clash_rules CASCADE;
 DROP TABLE IF EXISTS clash_proxy_groups CASCADE;
 DROP TABLE IF EXISTS clash_proxies CASCADE;
@@ -135,6 +135,6 @@ export ADMIN_TOKEN="your_jwt_token"
 ## 需要帮助？
 
 1. 查看日志：`docker-compose logs -f api`
-2. 检查数据库：`docker-compose exec postgres psql -U postgres -d vpn_platform`
+2. 检查数据库：`docker-compose exec postgres psql -U vpn_user -d vpn_platform`
 3. 查看文档：`docs/` 目录
 4. 运行示例：`examples/clash_config_example.sh`

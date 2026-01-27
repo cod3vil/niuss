@@ -43,9 +43,10 @@ if [ -f .env ]; then
 fi
 
 DB_NAME="${DATABASE_NAME:-vpn_platform}"
-DB_USER="${DATABASE_USER:-postgres}"
+DB_USER="${DATABASE_USER:-vpn_user}"
 
 echo "Running migration via Docker..."
+echo "Database: $DB_NAME, User: $DB_USER"
 
 # Copy migration file to postgres container
 POSTGRES_CONTAINER=$(docker-compose ps -q postgres)
