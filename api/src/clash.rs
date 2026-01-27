@@ -1,0 +1,587 @@
+use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::models::Node;
+
+/// Clash proxy configuration
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ClashProxy {
+    #[serde(rename = "ss")]
+    Shadowsocks {
+        name: String,
+        server: String,
+        port: u16,
+        cipher: String,
+        password: String,
+        udp: bool,
+    },
+    #[serde(rename = "vmess")]
+    VMess {
+        name: String,
+        server: String,
+        port: u16,
+        uuid: String,
+        #[serde(rename = "alterId")]
+        alter_id: u16,
+        cipher: String,
+        udp: bool,
+        network: String,
+    },
+    #[serde(rename = "trojan")]
+    Trojan {
+        name: String,
+        server: String,
+        port: u16,
+        password: String,
+        udp: bool,
+        sni: Option<String>,
+        #[serde(rename = "skip-cert-verify")]
+        skip_cert_verify: bool,
+    },
+    #[serde(rename = "hysteria2")]
+    Hysteria2 {
+        name: String,
+        server: String,
+        port: u16,
+        password: String,
+        obfs: Option<String>,
+        #[serde(rename = "obfs-password")]
+        obfs_password: Option<String>,
+        sni: Option<String>,
+        #[serde(rename = "skip-cert-verify")]
+        skip_cert_verify: bool,
+    },
+    #[serde(rename = "vless")]
+    VLESS {
+        name: String,
+        server: String,
+        port: u16,
+        uuid: String,
+        flow: Option<String>,
+        network: String,
+        #[serde(rename = "reality-opts")]
+        reality_opts: Option<RealityOpts>,
+        #[serde(rename = "client-fingerprint")]
+        client_fingerprint: Option<String>,
+    },
+}
+
+/// Reality options for VLESS
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RealityOpts {
+    #[serde(rename = "public-key")]
+    pub public_key: String,
+    #[serde(rename = "short-id")]
+    pub short_id: String,
+}
+
+/// Complete Clash configuration
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClashConfig {
+    pub proxies: Vec<ClashProxy>,
+    #[serde(rename = "proxy-groups")]
+    pub proxy_groups: Vec<ProxyGroup>,
+    pub rules: Vec<String>,
+}
+
+/// Proxy group configuration
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProxyGroup {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub group_type: String,
+    pub proxies: Vec<String>,
+}
+
+/// Generate Clash configuration from nodes
+pub fn generate_clash_config(nodes: &[Node]) -> Result<String> {
+    let mut proxies = Vec::new();
+    let mut proxy_names = Vec::new();
+
+    for node in nodes {
+        let proxy = node_to_clash_proxy(node)?;
+        let name = get_proxy_name(&proxy);
+        proxy_names.push(name);
+        proxies.push(proxy);
+    }
+
+    // Create proxy groups
+    let proxy_groups = vec![
+        ProxyGroup {
+            name: "Proxy".to_string(),
+            group_type: "select".to_string(),
+            proxies: proxy_names.clone(),
+        },
+        ProxyGroup {
+            name: "Auto".to_string(),
+            group_type: "url-test".to_string(),
+            proxies: proxy_names,
+        },
+    ];
+
+    // Default rules
+    let rules = vec![
+        "DOMAIN-SUFFIX,google.com,Proxy".to_string(),
+        "DOMAIN-SUFFIX,youtube.com,Proxy".to_string(),
+        "DOMAIN-SUFFIX,facebook.com,Proxy".to_string(),
+        "DOMAIN-SUFFIX,twitter.com,Proxy".to_string(),
+        "GEOIP,CN,DIRECT".to_string(),
+        "MATCH,Proxy".to_string(),
+    ];
+
+    let config = ClashConfig {
+        proxies,
+        proxy_groups,
+        rules,
+    };
+
+    // Serialize to YAML
+    let yaml = serde_yaml::to_string(&config)
+        .map_err(|e| anyhow!("Failed to serialize Clash config: {}", e))?;
+
+    Ok(yaml)
+}
+
+/// Convert a Node to a ClashProxy
+fn node_to_clash_proxy(node: &Node) -> Result<ClashProxy> {
+    match node.protocol.as_str() {
+        "shadowsocks" => generate_shadowsocks_proxy(node),
+        "vmess" => generate_vmess_proxy(node),
+        "trojan" => generate_trojan_proxy(node),
+        "hysteria2" => generate_hysteria2_proxy(node),
+        "vless" => generate_vless_proxy(node),
+        _ => Err(anyhow!("Unsupported protocol: {}", node.protocol)),
+    }
+}
+
+/// Get proxy name from ClashProxy
+fn get_proxy_name(proxy: &ClashProxy) -> String {
+    match proxy {
+        ClashProxy::Shadowsocks { name, .. } => name.clone(),
+        ClashProxy::VMess { name, .. } => name.clone(),
+        ClashProxy::Trojan { name, .. } => name.clone(),
+        ClashProxy::Hysteria2 { name, .. } => name.clone(),
+        ClashProxy::VLESS { name, .. } => name.clone(),
+    }
+}
+
+/// Generate Shadowsocks proxy configuration
+fn generate_shadowsocks_proxy(node: &Node) -> Result<ClashProxy> {
+    let config = &node.config;
+    
+    let cipher = config
+        .get("method")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing 'method' in Shadowsocks config"))?
+        .to_string();
+    
+    let password = config
+        .get("password")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing 'password' in Shadowsocks config"))?
+        .to_string();
+
+    Ok(ClashProxy::Shadowsocks {
+        name: node.name.clone(),
+        server: node.host.clone(),
+        port: node.port as u16,
+        cipher,
+        password,
+        udp: true,
+    })
+}
+
+/// Generate VMess proxy configuration
+fn generate_vmess_proxy(node: &Node) -> Result<ClashProxy> {
+    let config = &node.config;
+    
+    let uuid = config
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing 'uuid' in VMess config"))?
+        .to_string();
+    
+    let alter_id = config
+        .get("alter_id")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u16;
+    
+    let security = config
+        .get("security")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto")
+        .to_string();
+    
+    let network = config
+        .get("network")
+        .and_then(|v| v.as_str())
+        .unwrap_or("tcp")
+        .to_string();
+
+    Ok(ClashProxy::VMess {
+        name: node.name.clone(),
+        server: node.host.clone(),
+        port: node.port as u16,
+        uuid,
+        alter_id,
+        cipher: security,
+        udp: true,
+        network,
+    })
+}
+
+/// Generate Trojan proxy configuration
+fn generate_trojan_proxy(node: &Node) -> Result<ClashProxy> {
+    let config = &node.config;
+    
+    let password = config
+        .get("password")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing 'password' in Trojan config"))?
+        .to_string();
+    
+    let sni = config
+        .get("sni")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    let skip_cert_verify = config
+        .get("skip_cert_verify")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    Ok(ClashProxy::Trojan {
+        name: node.name.clone(),
+        server: node.host.clone(),
+        port: node.port as u16,
+        password,
+        udp: true,
+        sni,
+        skip_cert_verify,
+    })
+}
+
+/// Generate Hysteria2 proxy configuration
+fn generate_hysteria2_proxy(node: &Node) -> Result<ClashProxy> {
+    let config = &node.config;
+    
+    let password = config
+        .get("password")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing 'password' in Hysteria2 config"))?
+        .to_string();
+    
+    let obfs = config
+        .get("obfs")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    let obfs_password = config
+        .get("obfs_password")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    let sni = config
+        .get("sni")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    let skip_cert_verify = config
+        .get("skip_cert_verify")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    Ok(ClashProxy::Hysteria2 {
+        name: node.name.clone(),
+        server: node.host.clone(),
+        port: node.port as u16,
+        password,
+        obfs,
+        obfs_password,
+        sni,
+        skip_cert_verify,
+    })
+}
+
+/// Generate VLESS proxy configuration
+fn generate_vless_proxy(node: &Node) -> Result<ClashProxy> {
+    let config = &node.config;
+    
+    let uuid = config
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("Missing 'uuid' in VLESS config"))?
+        .to_string();
+    
+    let flow = config
+        .get("flow")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
+    let network = config
+        .get("network")
+        .and_then(|v| v.as_str())
+        .unwrap_or("tcp")
+        .to_string();
+    
+    // Parse Reality configuration if present
+    let reality_opts = if let Some(reality) = config.get("reality") {
+        let public_key = reality
+            .get("publicKey")
+            .or_else(|| reality.get("public_key"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'publicKey' in Reality config"))?
+            .to_string();
+        
+        let short_id = reality
+            .get("shortIds")
+            .or_else(|| reality.get("short_ids"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        
+        Some(RealityOpts {
+            public_key,
+            short_id,
+        })
+    } else {
+        None
+    };
+    
+    let client_fingerprint = config
+        .get("client_fingerprint")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| Some("chrome".to_string()));
+
+    Ok(ClashProxy::VLESS {
+        name: node.name.clone(),
+        server: node.host.clone(),
+        port: node.port as u16,
+        uuid,
+        flow,
+        network,
+        reality_opts,
+        client_fingerprint,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use serde_json::Value as JsonValue;
+
+    fn create_test_node(protocol: &str, config: JsonValue) -> Node {
+        Node {
+            id: 1,
+            name: format!("Test {} Node", protocol),
+            host: "example.com".to_string(),
+            port: 443,
+            protocol: protocol.to_string(),
+            secret: "test_secret".to_string(),
+            config,
+            status: "online".to_string(),
+            max_users: 1000,
+            current_users: 0,
+            total_upload: 0,
+            total_download: 0,
+            last_heartbeat: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_generate_shadowsocks_proxy() {
+        let config = serde_json::json!({
+            "method": "aes-256-gcm",
+            "password": "test_password"
+        });
+        
+        let node = create_test_node("shadowsocks", config);
+        let proxy = generate_shadowsocks_proxy(&node).unwrap();
+        
+        match proxy {
+            ClashProxy::Shadowsocks { name, server, port, cipher, password, udp } => {
+                assert_eq!(name, "Test shadowsocks Node");
+                assert_eq!(server, "example.com");
+                assert_eq!(port, 443);
+                assert_eq!(cipher, "aes-256-gcm");
+                assert_eq!(password, "test_password");
+                assert!(udp);
+            }
+            _ => panic!("Expected Shadowsocks proxy"),
+        }
+    }
+
+    #[test]
+    fn test_generate_vmess_proxy() {
+        let config = serde_json::json!({
+            "uuid": "12345678-1234-1234-1234-123456789012",
+            "alter_id": 0,
+            "security": "auto",
+            "network": "tcp"
+        });
+        
+        let node = create_test_node("vmess", config);
+        let proxy = generate_vmess_proxy(&node).unwrap();
+        
+        match proxy {
+            ClashProxy::VMess { name, server, port, uuid, alter_id, cipher, udp, network } => {
+                assert_eq!(name, "Test vmess Node");
+                assert_eq!(server, "example.com");
+                assert_eq!(port, 443);
+                assert_eq!(uuid, "12345678-1234-1234-1234-123456789012");
+                assert_eq!(alter_id, 0);
+                assert_eq!(cipher, "auto");
+                assert!(udp);
+                assert_eq!(network, "tcp");
+            }
+            _ => panic!("Expected VMess proxy"),
+        }
+    }
+
+    #[test]
+    fn test_generate_trojan_proxy() {
+        let config = serde_json::json!({
+            "password": "test_password",
+            "sni": "example.com",
+            "skip_cert_verify": false
+        });
+        
+        let node = create_test_node("trojan", config);
+        let proxy = generate_trojan_proxy(&node).unwrap();
+        
+        match proxy {
+            ClashProxy::Trojan { name, server, port, password, udp, sni, skip_cert_verify } => {
+                assert_eq!(name, "Test trojan Node");
+                assert_eq!(server, "example.com");
+                assert_eq!(port, 443);
+                assert_eq!(password, "test_password");
+                assert!(udp);
+                assert_eq!(sni, Some("example.com".to_string()));
+                assert!(!skip_cert_verify);
+            }
+            _ => panic!("Expected Trojan proxy"),
+        }
+    }
+
+    #[test]
+    fn test_generate_hysteria2_proxy() {
+        let config = serde_json::json!({
+            "password": "test_password",
+            "obfs": "salamander",
+            "obfs_password": "obfs_pass",
+            "sni": "example.com",
+            "skip_cert_verify": false
+        });
+        
+        let node = create_test_node("hysteria2", config);
+        let proxy = generate_hysteria2_proxy(&node).unwrap();
+        
+        match proxy {
+            ClashProxy::Hysteria2 { name, server, port, password, obfs, obfs_password, sni, skip_cert_verify } => {
+                assert_eq!(name, "Test hysteria2 Node");
+                assert_eq!(server, "example.com");
+                assert_eq!(port, 443);
+                assert_eq!(password, "test_password");
+                assert_eq!(obfs, Some("salamander".to_string()));
+                assert_eq!(obfs_password, Some("obfs_pass".to_string()));
+                assert_eq!(sni, Some("example.com".to_string()));
+                assert!(!skip_cert_verify);
+            }
+            _ => panic!("Expected Hysteria2 proxy"),
+        }
+    }
+
+    #[test]
+    fn test_generate_vless_proxy() {
+        let config = serde_json::json!({
+            "uuid": "12345678-1234-1234-1234-123456789012",
+            "flow": "xtls-rprx-vision",
+            "network": "tcp",
+            "reality": {
+                "publicKey": "test_public_key",
+                "shortIds": [""]
+            }
+        });
+        
+        let node = create_test_node("vless", config);
+        let proxy = generate_vless_proxy(&node).unwrap();
+        
+        match proxy {
+            ClashProxy::VLESS { name, server, port, uuid, flow, network, reality_opts, client_fingerprint } => {
+                assert_eq!(name, "Test vless Node");
+                assert_eq!(server, "example.com");
+                assert_eq!(port, 443);
+                assert_eq!(uuid, "12345678-1234-1234-1234-123456789012");
+                assert_eq!(flow, Some("xtls-rprx-vision".to_string()));
+                assert_eq!(network, "tcp");
+                assert!(reality_opts.is_some());
+                if let Some(reality) = reality_opts {
+                    assert_eq!(reality.public_key, "test_public_key");
+                    assert_eq!(reality.short_id, "");
+                }
+                assert_eq!(client_fingerprint, Some("chrome".to_string()));
+            }
+            _ => panic!("Expected VLESS proxy"),
+        }
+    }
+
+    #[test]
+    fn test_generate_clash_config() {
+        let nodes = vec![
+            create_test_node("shadowsocks", serde_json::json!({
+                "method": "aes-256-gcm",
+                "password": "test_password"
+            })),
+            create_test_node("vmess", serde_json::json!({
+                "uuid": "12345678-1234-1234-1234-123456789012",
+                "alter_id": 0,
+                "security": "auto"
+            })),
+        ];
+        
+        let yaml = generate_clash_config(&nodes).unwrap();
+        
+        // Verify YAML is valid
+        assert!(yaml.contains("proxies:"));
+        assert!(yaml.contains("proxy-groups:"));
+        assert!(yaml.contains("rules:"));
+        assert!(yaml.contains("Test shadowsocks Node"));
+        assert!(yaml.contains("Test vmess Node"));
+    }
+
+    #[test]
+    fn test_reality_config_completeness() {
+        let config = serde_json::json!({
+            "uuid": "12345678-1234-1234-1234-123456789012",
+            "flow": "xtls-rprx-vision",
+            "network": "tcp",
+            "reality": {
+                "publicKey": "test_public_key_12345",
+                "privateKey": "test_private_key_67890",
+                "shortIds": ["abc123", "def456"],
+                "dest": "www.microsoft.com:443",
+                "serverNames": ["www.microsoft.com"]
+            }
+        });
+        
+        let node = create_test_node("vless", config);
+        let proxy = generate_vless_proxy(&node).unwrap();
+        
+        match proxy {
+            ClashProxy::VLESS { reality_opts, .. } => {
+                assert!(reality_opts.is_some());
+                let reality = reality_opts.unwrap();
+                assert_eq!(reality.public_key, "test_public_key_12345");
+                assert_eq!(reality.short_id, "abc123"); // First short ID
+            }
+            _ => panic!("Expected VLESS proxy"),
+        }
+    }
+}

@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: vpn-postgres
+    environment:
+      POSTGRES_DB: vpn_platform
+      POSTGRES_USER: vpn_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-vpn_password}
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vpn_user -d vpn_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vpn-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: vpn-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vpn-network
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: vpn-api
+    environment:
+      DATABASE_URL: postgres://vpn_user:${DB_PASSWORD:-vpn_password}@postgres:5432/vpn_platform
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400}
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vpn-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+    container_name: vpn-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    networks:
+      - vpn-network
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+    container_name: vpn-admin
+    ports:
+      - "8081:80"
+    depends_on:
+      - api
+    networks:
+      - vpn-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  vpn-network:
+    driver: bridge

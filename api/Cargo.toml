@@ -1,0 +1,36 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace dependencies
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+sqlx.workspace = true
+redis.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+jsonwebtoken.workspace = true
+argon2.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+dotenv.workspace = true
+
+# Additional dependencies
+validator = { version = "0.16", features = ["derive"] }
+rand = "0.8"
+regex = "1.10"
+
+[dev-dependencies]
+proptest.workspace = true
+axum-test = "14"

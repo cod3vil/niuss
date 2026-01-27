@@ -1,0 +1,1059 @@
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+
+use crate::models::{
+    AdminLog, CoinTransaction, Node, Order, Package, Subscription, TrafficLog, User, UserPackage,
+};
+
+/// Create a database connection pool
+pub async fn create_pool(database_url: &str) -> Result<PgPool> {
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(database_url)
+        .await?;
+
+    Ok(pool)
+}
+
+// ============================================================================
+// User CRUD Operations
+// ============================================================================
+
+/// Create a new user
+pub async fn create_user(
+    pool: &PgPool,
+    email: &str,
+    password_hash: &str,
+    referral_code: Option<&str>,
+    referred_by: Option<i64>,
+) -> Result<User> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        INSERT INTO users (email, password_hash, referral_code, referred_by)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        "#,
+    )
+    .bind(email)
+    .bind(password_hash)
+    .bind(referral_code)
+    .bind(referred_by)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// Get user by ID
+pub async fn get_user_by_id(pool: &PgPool, user_id: i64) -> Result<Option<User>> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        SELECT * FROM users WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// Get user by email
+pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        SELECT * FROM users WHERE email = $1
+        "#,
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// Get user by referral code
+pub async fn get_user_by_referral_code(
+    pool: &PgPool,
+    referral_code: &str,
+) -> Result<Option<User>> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        SELECT * FROM users WHERE referral_code = $1
+        "#,
+    )
+    .bind(referral_code)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// Update user coin balance
+pub async fn update_user_coin_balance(
+    pool: &PgPool,
+    user_id: i64,
+    new_balance: i64,
+) -> Result<User> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users
+        SET coin_balance = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(new_balance)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// Update user traffic quota and used
+pub async fn update_user_traffic(
+    pool: &PgPool,
+    user_id: i64,
+    traffic_quota: i64,
+    traffic_used: i64,
+) -> Result<User> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users
+        SET traffic_quota = $2, traffic_used = $3, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(traffic_quota)
+    .bind(traffic_used)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// Update user status
+pub async fn update_user_status(pool: &PgPool, user_id: i64, status: &str) -> Result<User> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users
+        SET status = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user)
+}
+
+/// List all users with pagination
+pub async fn list_users(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<User>> {
+    let users = sqlx::query_as::<_, User>(
+        r#"
+        SELECT * FROM users
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(users)
+}
+
+/// Count total users
+pub async fn count_users(pool: &PgPool) -> Result<i64> {
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM users
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count.0)
+}
+
+/// Delete user (soft delete by setting status to disabled)
+pub async fn delete_user(pool: &PgPool, user_id: i64) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET status = 'disabled', updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Package CRUD Operations
+// ============================================================================
+
+/// Create a new package
+pub async fn create_package(
+    pool: &PgPool,
+    name: &str,
+    traffic_amount: i64,
+    price: i64,
+    duration_days: i32,
+    description: Option<&str>,
+) -> Result<Package> {
+    let package = sqlx::query_as::<_, Package>(
+        r#"
+        INSERT INTO packages (name, traffic_amount, price, duration_days, description)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+        "#,
+    )
+    .bind(name)
+    .bind(traffic_amount)
+    .bind(price)
+    .bind(duration_days)
+    .bind(description)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(package)
+}
+
+/// Get package by ID
+pub async fn get_package_by_id(pool: &PgPool, package_id: i64) -> Result<Option<Package>> {
+    let package = sqlx::query_as::<_, Package>(
+        r#"
+        SELECT * FROM packages WHERE id = $1
+        "#,
+    )
+    .bind(package_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(package)
+}
+
+/// List all active packages
+pub async fn list_active_packages(pool: &PgPool) -> Result<Vec<Package>> {
+    let packages = sqlx::query_as::<_, Package>(
+        r#"
+        SELECT * FROM packages
+        WHERE is_active = true
+        ORDER BY price ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(packages)
+}
+
+/// List all packages (including inactive)
+pub async fn list_all_packages(pool: &PgPool) -> Result<Vec<Package>> {
+    let packages = sqlx::query_as::<_, Package>(
+        r#"
+        SELECT * FROM packages
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(packages)
+}
+
+/// Update package
+pub async fn update_package(
+    pool: &PgPool,
+    package_id: i64,
+    name: Option<&str>,
+    traffic_amount: Option<i64>,
+    price: Option<i64>,
+    duration_days: Option<i32>,
+    description: Option<&str>,
+    is_active: Option<bool>,
+) -> Result<Package> {
+    // Build dynamic update query
+    let mut query = String::from("UPDATE packages SET updated_at = NOW()");
+    let mut bind_count = 1;
+
+    if name.is_some() {
+        query.push_str(&format!(", name = ${}", bind_count));
+        bind_count += 1;
+    }
+    if traffic_amount.is_some() {
+        query.push_str(&format!(", traffic_amount = ${}", bind_count));
+        bind_count += 1;
+    }
+    if price.is_some() {
+        query.push_str(&format!(", price = ${}", bind_count));
+        bind_count += 1;
+    }
+    if duration_days.is_some() {
+        query.push_str(&format!(", duration_days = ${}", bind_count));
+        bind_count += 1;
+    }
+    if description.is_some() {
+        query.push_str(&format!(", description = ${}", bind_count));
+        bind_count += 1;
+    }
+    if is_active.is_some() {
+        query.push_str(&format!(", is_active = ${}", bind_count));
+        bind_count += 1;
+    }
+
+    query.push_str(&format!(" WHERE id = ${} RETURNING *", bind_count));
+
+    let mut q = sqlx::query_as::<_, Package>(&query);
+
+    if let Some(n) = name {
+        q = q.bind(n);
+    }
+    if let Some(ta) = traffic_amount {
+        q = q.bind(ta);
+    }
+    if let Some(p) = price {
+        q = q.bind(p);
+    }
+    if let Some(dd) = duration_days {
+        q = q.bind(dd);
+    }
+    if let Some(d) = description {
+        q = q.bind(d);
+    }
+    if let Some(ia) = is_active {
+        q = q.bind(ia);
+    }
+
+    q = q.bind(package_id);
+
+    let package = q.fetch_one(pool).await?;
+
+    Ok(package)
+}
+
+/// Delete package (soft delete by setting is_active to false)
+pub async fn delete_package(pool: &PgPool, package_id: i64) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE packages
+        SET is_active = false, updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(package_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Order CRUD Operations
+// ============================================================================
+
+/// Create a new order
+pub async fn create_order(
+    pool: &PgPool,
+    order_no: &str,
+    user_id: i64,
+    package_id: i64,
+    amount: i64,
+) -> Result<Order> {
+    let order = sqlx::query_as::<_, Order>(
+        r#"
+        INSERT INTO orders (order_no, user_id, package_id, amount, status)
+        VALUES ($1, $2, $3, $4, 'pending')
+        RETURNING *
+        "#,
+    )
+    .bind(order_no)
+    .bind(user_id)
+    .bind(package_id)
+    .bind(amount)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(order)
+}
+
+/// Get order by ID
+pub async fn get_order_by_id(pool: &PgPool, order_id: i64) -> Result<Option<Order>> {
+    let order = sqlx::query_as::<_, Order>(
+        r#"
+        SELECT * FROM orders WHERE id = $1
+        "#,
+    )
+    .bind(order_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(order)
+}
+
+/// Get order by order number
+pub async fn get_order_by_order_no(pool: &PgPool, order_no: &str) -> Result<Option<Order>> {
+    let order = sqlx::query_as::<_, Order>(
+        r#"
+        SELECT * FROM orders WHERE order_no = $1
+        "#,
+    )
+    .bind(order_no)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(order)
+}
+
+/// List orders by user ID
+pub async fn list_orders_by_user(
+    pool: &PgPool,
+    user_id: i64,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Order>> {
+    let orders = sqlx::query_as::<_, Order>(
+        r#"
+        SELECT * FROM orders
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(user_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(orders)
+}
+
+/// List all orders with pagination
+pub async fn list_all_orders(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<Order>> {
+    let orders = sqlx::query_as::<_, Order>(
+        r#"
+        SELECT * FROM orders
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(orders)
+}
+
+/// Update order status
+pub async fn update_order_status(
+    pool: &PgPool,
+    order_id: i64,
+    status: &str,
+    completed_at: Option<DateTime<Utc>>,
+) -> Result<Order> {
+    let order = sqlx::query_as::<_, Order>(
+        r#"
+        UPDATE orders
+        SET status = $2, completed_at = $3
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(order_id)
+    .bind(status)
+    .bind(completed_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(order)
+}
+
+/// Count orders by status
+pub async fn count_orders_by_status(pool: &PgPool, status: &str) -> Result<i64> {
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM orders WHERE status = $1
+        "#,
+    )
+    .bind(status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count.0)
+}
+
+/// Get total revenue (sum of completed orders)
+pub async fn get_total_revenue(pool: &PgPool) -> Result<i64> {
+    let revenue: (Option<i64>,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(amount), 0)::BIGINT FROM orders WHERE status = 'completed'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(revenue.0.unwrap_or(0))
+}
+
+// ============================================================================
+// Node CRUD Operations
+// ============================================================================
+
+/// Create a new node
+pub async fn create_node(
+    pool: &PgPool,
+    name: &str,
+    host: &str,
+    port: i32,
+    protocol: &str,
+    secret: &str,
+    config: serde_json::Value,
+) -> Result<Node> {
+    let node = sqlx::query_as::<_, Node>(
+        r#"
+        INSERT INTO nodes (name, host, port, protocol, secret, config)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+        "#,
+    )
+    .bind(name)
+    .bind(host)
+    .bind(port)
+    .bind(protocol)
+    .bind(secret)
+    .bind(config)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(node)
+}
+
+/// Get node by ID
+pub async fn get_node_by_id(pool: &PgPool, node_id: i64) -> Result<Option<Node>> {
+    let node = sqlx::query_as::<_, Node>(
+        r#"
+        SELECT * FROM nodes WHERE id = $1
+        "#,
+    )
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(node)
+}
+
+/// Get node by ID and secret (for authentication)
+pub async fn get_node_by_id_and_secret(
+    pool: &PgPool,
+    node_id: i64,
+    secret: &str,
+) -> Result<Option<Node>> {
+    let node = sqlx::query_as::<_, Node>(
+        r#"
+        SELECT * FROM nodes WHERE id = $1 AND secret = $2
+        "#,
+    )
+    .bind(node_id)
+    .bind(secret)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(node)
+}
+
+/// List all nodes
+pub async fn list_all_nodes(pool: &PgPool) -> Result<Vec<Node>> {
+    let nodes = sqlx::query_as::<_, Node>(
+        r#"
+        SELECT * FROM nodes
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(nodes)
+}
+
+/// List nodes by status
+pub async fn list_nodes_by_status(pool: &PgPool, status: &str) -> Result<Vec<Node>> {
+    let nodes = sqlx::query_as::<_, Node>(
+        r#"
+        SELECT * FROM nodes
+        WHERE status = $1
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(status)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(nodes)
+}
+
+/// Update node
+pub async fn update_node(
+    pool: &PgPool,
+    node_id: i64,
+    name: Option<&str>,
+    host: Option<&str>,
+    port: Option<i32>,
+    protocol: Option<&str>,
+    config: Option<serde_json::Value>,
+    status: Option<&str>,
+) -> Result<Node> {
+    // Build dynamic update query
+    let mut query = String::from("UPDATE nodes SET updated_at = NOW()");
+    let mut bind_count = 1;
+
+    if name.is_some() {
+        query.push_str(&format!(", name = ${}", bind_count));
+        bind_count += 1;
+    }
+    if host.is_some() {
+        query.push_str(&format!(", host = ${}", bind_count));
+        bind_count += 1;
+    }
+    if port.is_some() {
+        query.push_str(&format!(", port = ${}", bind_count));
+        bind_count += 1;
+    }
+    if protocol.is_some() {
+        query.push_str(&format!(", protocol = ${}", bind_count));
+        bind_count += 1;
+    }
+    if config.is_some() {
+        query.push_str(&format!(", config = ${}", bind_count));
+        bind_count += 1;
+    }
+    if status.is_some() {
+        query.push_str(&format!(", status = ${}", bind_count));
+        bind_count += 1;
+    }
+
+    query.push_str(&format!(" WHERE id = ${} RETURNING *", bind_count));
+
+    let mut q = sqlx::query_as::<_, Node>(&query);
+
+    if let Some(n) = name {
+        q = q.bind(n);
+    }
+    if let Some(h) = host {
+        q = q.bind(h);
+    }
+    if let Some(p) = port {
+        q = q.bind(p);
+    }
+    if let Some(pr) = protocol {
+        q = q.bind(pr);
+    }
+    if let Some(c) = config {
+        q = q.bind(c);
+    }
+    if let Some(s) = status {
+        q = q.bind(s);
+    }
+
+    q = q.bind(node_id);
+
+    let node = q.fetch_one(pool).await?;
+
+    Ok(node)
+}
+
+/// Update node heartbeat
+pub async fn update_node_heartbeat(
+    pool: &PgPool,
+    node_id: i64,
+    status: &str,
+    current_users: Option<i32>,
+) -> Result<Node> {
+    let node = sqlx::query_as::<_, Node>(
+        r#"
+        UPDATE nodes
+        SET status = $2, current_users = COALESCE($3, current_users), 
+            last_heartbeat = NOW(), updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(node_id)
+    .bind(status)
+    .bind(current_users)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(node)
+}
+
+/// Update node traffic statistics
+pub async fn update_node_traffic(
+    pool: &PgPool,
+    node_id: i64,
+    upload_delta: i64,
+    download_delta: i64,
+) -> Result<Node> {
+    let node = sqlx::query_as::<_, Node>(
+        r#"
+        UPDATE nodes
+        SET total_upload = total_upload + $2,
+            total_download = total_download + $3,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(node_id)
+    .bind(upload_delta)
+    .bind(download_delta)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(node)
+}
+
+/// Delete node
+pub async fn delete_node(pool: &PgPool, node_id: i64) -> Result<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM nodes WHERE id = $1
+        "#,
+    )
+    .bind(node_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Count nodes by status
+pub async fn count_nodes_by_status(pool: &PgPool, status: &str) -> Result<i64> {
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM nodes WHERE status = $1
+        "#,
+    )
+    .bind(status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count.0)
+}
+
+// ============================================================================
+// Additional helper functions
+// ============================================================================
+
+/// Create a user package
+pub async fn create_user_package(
+    pool: &PgPool,
+    user_id: i64,
+    package_id: i64,
+    order_id: i64,
+    traffic_quota: i64,
+    expires_at: DateTime<Utc>,
+) -> Result<UserPackage> {
+    let user_package = sqlx::query_as::<_, UserPackage>(
+        r#"
+        INSERT INTO user_packages (user_id, package_id, order_id, traffic_quota, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(package_id)
+    .bind(order_id)
+    .bind(traffic_quota)
+    .bind(expires_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user_package)
+}
+
+/// Create a subscription
+pub async fn create_subscription(pool: &PgPool, user_id: i64, token: &str) -> Result<Subscription> {
+    let subscription = sqlx::query_as::<_, Subscription>(
+        r#"
+        INSERT INTO subscriptions (user_id, token)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id) DO UPDATE SET token = $2
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(token)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(subscription)
+}
+
+/// Get subscription by token
+pub async fn get_subscription_by_token(
+    pool: &PgPool,
+    token: &str,
+) -> Result<Option<Subscription>> {
+    let subscription = sqlx::query_as::<_, Subscription>(
+        r#"
+        SELECT * FROM subscriptions WHERE token = $1
+        "#,
+    )
+    .bind(token)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(subscription)
+}
+
+/// Create a coin transaction
+pub async fn create_coin_transaction(
+    pool: &PgPool,
+    user_id: i64,
+    amount: i64,
+    transaction_type: &str,
+    description: Option<&str>,
+) -> Result<CoinTransaction> {
+    let transaction = sqlx::query_as::<_, CoinTransaction>(
+        r#"
+        INSERT INTO coin_transactions (user_id, amount, type, description)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(amount)
+    .bind(transaction_type)
+    .bind(description)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(transaction)
+}
+
+/// Create an admin log
+pub async fn create_admin_log(
+    pool: &PgPool,
+    admin_id: i64,
+    action: &str,
+    target_type: Option<&str>,
+    target_id: Option<i64>,
+    details: Option<serde_json::Value>,
+) -> Result<AdminLog> {
+    let log = sqlx::query_as::<_, AdminLog>(
+        r#"
+        INSERT INTO admin_logs (admin_id, action, target_type, target_id, details)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+        "#,
+    )
+    .bind(admin_id)
+    .bind(action)
+    .bind(target_type)
+    .bind(target_id)
+    .bind(details)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(log)
+}
+
+/// Create a traffic log
+pub async fn create_traffic_log(
+    pool: &PgPool,
+    user_id: i64,
+    node_id: i64,
+    upload: i64,
+    download: i64,
+) -> Result<TrafficLog> {
+    let log = sqlx::query_as::<_, TrafficLog>(
+        r#"
+        INSERT INTO traffic_logs (user_id, node_id, upload, download)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(node_id)
+    .bind(upload)
+    .bind(download)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(log)
+}
+
+/// Check if user has made any completed purchases
+pub async fn has_user_made_purchase(pool: &PgPool, user_id: i64) -> Result<bool> {
+    let count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM orders
+        WHERE user_id = $1 AND status = 'completed'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count.0 > 0)
+}
+
+/// Process referral rebate for first purchase
+/// Returns the referrer user if rebate was processed, None otherwise
+pub async fn process_referral_rebate(
+    pool: &PgPool,
+    user_id: i64,
+    purchase_amount: i64,
+    rebate_percentage: f64,
+) -> Result<Option<User>> {
+    // Start a transaction
+    let mut tx = pool.begin().await?;
+
+    // Get the user to check if they were referred
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    // Check if user was referred by someone
+    let referrer_id = match user.referred_by {
+        Some(id) => id,
+        None => {
+            // No referrer, nothing to do
+            tx.rollback().await?;
+            return Ok(None);
+        }
+    };
+
+    // Prevent self-referral (should not happen, but double-check)
+    if referrer_id == user_id {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+
+    // Check if this is the user's first completed purchase
+    let previous_purchases: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM orders
+        WHERE user_id = $1 AND status = 'completed'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if previous_purchases.0 > 0 {
+        // Not the first purchase, no rebate
+        tx.rollback().await?;
+        return Ok(None);
+    }
+
+    // Calculate rebate amount (default 10% if not specified)
+    let rebate_amount = (purchase_amount as f64 * rebate_percentage) as i64;
+
+    if rebate_amount <= 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+
+    // Get referrer with row lock
+    let referrer = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1 FOR UPDATE")
+        .bind(referrer_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+    // Add rebate to referrer's balance
+    let new_balance = referrer.coin_balance + rebate_amount;
+    let updated_referrer = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users
+        SET coin_balance = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(referrer_id)
+    .bind(new_balance)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Create coin transaction record for the rebate
+    sqlx::query(
+        r#"
+        INSERT INTO coin_transactions (user_id, amount, type, description)
+        VALUES ($1, $2, 'referral', $3)
+        "#,
+    )
+    .bind(referrer_id)
+    .bind(rebate_amount)
+    .bind(format!("Referral rebate from user {}", user_id))
+    .execute(&mut *tx)
+    .await?;
+
+    // Commit transaction
+    tx.commit().await?;
+
+    Ok(Some(updated_referrer))
+}
+
+/// Get referral statistics for a user
+/// Returns (number of referrals, total rebate amount)
+pub async fn get_referral_stats(pool: &PgPool, user_id: i64) -> Result<(i64, i64)> {
+    // Count number of users referred by this user
+    let referral_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM users
+        WHERE referred_by = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    // Sum total rebate amount from coin transactions
+    let total_rebate: (Option<i64>,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(amount), 0)::BIGINT FROM coin_transactions
+        WHERE user_id = $1 AND type = 'referral'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok((referral_count.0, total_rebate.0.unwrap_or(0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore] // Requires database to be running
+    async fn test_create_pool() {
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://vpn_user:vpn_password@localhost/vpn_platform".to_string());
+
+        let result = create_pool(&database_url).await;
+        assert!(result.is_ok());
+    }
+}
+
+// Include comprehensive database tests
+#[cfg(test)]
+#[path = "db_tests.rs"]
+mod db_tests;

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 26d9df135c661a4f5a3aaa6a4627e07230010f4e5aba33d2864bc68f7ad0426c # shrinks to api_url = "https://52b9.51..-0fg..90-.z.w-k3lsx.xab", node_id = "pb-evawp-j-7g7csc2", node_secret = "xqK-c_xzKQEF4_UjsT4F-fDq-Q7RKA___3Vows-qKK"
+cc f24aa1e4d4db663017eb6c5ccb7445f77c05e235d7cdc70769babe5640969e75 # shrinks to api_url = "http://2-..5l..uu09y6p.-..q..dwq", node_id = "8-a049rq-m", node_secret = "HAk_t1-6AB7BALp18_N-_zD6qBaGT8--O-8E4_s_p-jNA78d_2", xray_port = 24976, traffic_interval = 37, heartbeat_interval = 348
