@@ -336,9 +336,20 @@ EOF
 deploy_services() {
     log_info "开始部署服务..."
 
-    # 拉取镜像
-    log_info "拉取 Docker 镜像..."
-    docker compose pull
+    # 检查是否已有镜像
+    local has_images=false
+    if docker images | grep -q "niuss-api"; then
+        log_info "检测到已存在的镜像"
+        has_images=true
+    fi
+
+    # 只在没有镜像时才拉取
+    if [ "$has_images" = false ]; then
+        log_info "拉取 Docker 镜像..."
+        docker compose pull
+    else
+        log_info "跳过镜像拉取（已存在）"
+    fi
 
     # 构建镜像
     log_info "构建应用镜像..."
