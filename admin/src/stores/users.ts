@@ -14,20 +14,32 @@ export interface User {
   updated_at: string
 }
 
+export interface UsersResponse {
+  users: User[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export const useUsersStore = defineStore('users', () => {
   const users = ref<User[]>([])
+  const total = ref(0)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const fetchUsers = async () => {
+  const fetchUsers = async (limit = 50, offset = 0) => {
     loading.value = true
     error.value = null
     
     try {
-      const response = await api.get<User[]>('/admin/users')
-      users.value = response.data
+      const response = await api.get<UsersResponse>('/admin/users', {
+        params: { limit, offset }
+      })
+      users.value = response.data.users
+      total.value = response.data.total
     } catch (e: any) {
       error.value = e.response?.data?.error?.message || '获取用户列表失败'
+      console.error('Failed to fetch users:', e)
     } finally {
       loading.value = false
     }
@@ -83,6 +95,7 @@ export const useUsersStore = defineStore('users', () => {
 
   return {
     users,
+    total,
     loading,
     error,
     fetchUsers,
