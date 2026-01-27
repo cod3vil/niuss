@@ -2,227 +2,243 @@
   <div class="clash-config">
     <h1>Clash 配置管理</h1>
     
-    <el-tabs v-model="activeTab" type="border-card">
+    <a-tabs v-model:activeKey="activeTab" type="card">
       <!-- 代理管理 -->
-      <el-tab-pane label="代理管理" name="proxies">
+      <a-tab-pane key="proxies" tab="代理管理">
         <div class="tab-header">
-          <el-button type="primary" @click="showProxyDialog('create')">添加代理</el-button>
-          <el-button @click="loadProxies">刷新</el-button>
+          <a-space>
+            <a-button type="primary" @click="showProxyDialog('create')">添加代理</a-button>
+            <a-button @click="loadProxies">刷新</a-button>
+          </a-space>
         </div>
         
-        <el-table :data="proxies" style="width: 100%" v-loading="loading">
-          <el-table-column prop="name" label="名称" width="150" />
-          <el-table-column prop="type" label="类型" width="100" />
-          <el-table-column prop="server" label="服务器" width="200" />
-          <el-table-column prop="port" label="端口" width="80" />
-          <el-table-column prop="is_active" label="状态" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.is_active ? 'success' : 'info'">
-                {{ row.is_active ? '启用' : '禁用' }}
-              </el-tag>
+        <a-table :dataSource="proxies" :columns="proxyColumns" :loading="loading" rowKey="id">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'is_active'">
+              <a-tag :color="record.is_active ? 'green' : 'default'">
+                {{ record.is_active ? '启用' : '禁用' }}
+              </a-tag>
             </template>
-          </el-table-column>
-          <el-table-column prop="sort_order" label="排序" width="80" />
-          <el-table-column label="操作" width="200">
-            <template #default="{ row }">
-              <el-button size="small" @click="showProxyDialog('edit', row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="deleteProxy(row.id)">删除</el-button>
+            <template v-else-if="column.key === 'action'">
+              <a-space>
+                <a-button size="small" @click="showProxyDialog('edit', record)">编辑</a-button>
+                <a-popconfirm title="确定删除?" @confirm="deleteProxy(record.id)">
+                  <a-button size="small" danger>删除</a-button>
+                </a-popconfirm>
+              </a-space>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+          </template>
+        </a-table>
+      </a-tab-pane>
 
       <!-- 代理组管理 -->
-      <el-tab-pane label="代理组管理" name="groups">
+      <a-tab-pane key="groups" tab="代理组管理">
         <div class="tab-header">
-          <el-button type="primary" @click="showGroupDialog('create')">添加代理组</el-button>
-          <el-button @click="loadGroups">刷新</el-button>
+          <a-space>
+            <a-button type="primary" @click="showGroupDialog('create')">添加代理组</a-button>
+            <a-button @click="loadGroups">刷新</a-button>
+          </a-space>
         </div>
         
-        <el-table :data="groups" style="width: 100%" v-loading="loading">
-          <el-table-column prop="name" label="名称" width="150" />
-          <el-table-column prop="type" label="类型" width="120" />
-          <el-table-column label="代理列表" min-width="200">
-            <template #default="{ row }">
-              <el-tag v-for="proxy in row.proxies" :key="proxy" size="small" style="margin: 2px">
+        <a-table :dataSource="groups" :columns="groupColumns" :loading="loading" rowKey="id">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'proxies'">
+              <a-tag v-for="proxy in record.proxies" :key="proxy" style="margin: 2px">
                 {{ proxy }}
-              </el-tag>
+              </a-tag>
             </template>
-          </el-table-column>
-          <el-table-column prop="is_active" label="状态" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.is_active ? 'success' : 'info'">
-                {{ row.is_active ? '启用' : '禁用' }}
-              </el-tag>
+            <template v-else-if="column.key === 'is_active'">
+              <a-tag :color="record.is_active ? 'green' : 'default'">
+                {{ record.is_active ? '启用' : '禁用' }}
+              </a-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="操作" width="200">
-            <template #default="{ row }">
-              <el-button size="small" @click="showGroupDialog('edit', row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="deleteGroup(row.id)">删除</el-button>
+            <template v-else-if="column.key === 'action'">
+              <a-space>
+                <a-button size="small" @click="showGroupDialog('edit', record)">编辑</a-button>
+                <a-popconfirm title="确定删除?" @confirm="deleteGroup(record.id)">
+                  <a-button size="small" danger>删除</a-button>
+                </a-popconfirm>
+              </a-space>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+          </template>
+        </a-table>
+      </a-tab-pane>
 
       <!-- 规则管理 -->
-      <el-tab-pane label="规则管理" name="rules">
+      <a-tab-pane key="rules" tab="规则管理">
         <div class="tab-header">
-          <el-button type="primary" @click="showRuleDialog('create')">添加规则</el-button>
-          <el-button @click="loadRules">刷新</el-button>
+          <a-space>
+            <a-button type="primary" @click="showRuleDialog('create')">添加规则</a-button>
+            <a-button @click="loadRules">刷新</a-button>
+          </a-space>
         </div>
         
-        <el-table :data="rules" style="width: 100%" v-loading="loading">
-          <el-table-column prop="rule_type" label="类型" width="150" />
-          <el-table-column prop="rule_value" label="值" width="200" />
-          <el-table-column prop="proxy_group" label="代理组" width="150" />
-          <el-table-column prop="description" label="描述" min-width="200" />
-          <el-table-column prop="sort_order" label="优先级" width="80" />
-          <el-table-column prop="is_active" label="状态" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.is_active ? 'success' : 'info'">
-                {{ row.is_active ? '启用' : '禁用' }}
-              </el-tag>
+        <a-table :dataSource="rules" :columns="ruleColumns" :loading="loading" rowKey="id">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'is_active'">
+              <a-tag :color="record.is_active ? 'green' : 'default'">
+                {{ record.is_active ? '启用' : '禁用' }}
+              </a-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="操作" width="200">
-            <template #default="{ row }">
-              <el-button size="small" @click="showRuleDialog('edit', row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="deleteRule(row.id)">删除</el-button>
+            <template v-else-if="column.key === 'action'">
+              <a-space>
+                <a-button size="small" @click="showRuleDialog('edit', record)">编辑</a-button>
+                <a-popconfirm title="确定删除?" @confirm="deleteRule(record.id)">
+                  <a-button size="small" danger>删除</a-button>
+                </a-popconfirm>
+              </a-space>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+          </template>
+        </a-table>
+      </a-tab-pane>
 
       <!-- 生成配置 -->
-      <el-tab-pane label="生成配置" name="generate">
+      <a-tab-pane key="generate" tab="生成配置">
         <div class="generate-section">
-          <el-button type="primary" size="large" @click="generateConfig">生成 Clash 配置</el-button>
-          <el-input
+          <a-button type="primary" size="large" @click="generateConfig" :loading="loading">
+            生成 Clash 配置
+          </a-button>
+          <a-textarea
             v-if="generatedConfig"
-            v-model="generatedConfig"
-            type="textarea"
+            v-model:value="generatedConfig"
             :rows="20"
             readonly
             style="margin-top: 20px"
           />
         </div>
-      </el-tab-pane>
-    </el-tabs>
+      </a-tab-pane>
+    </a-tabs>
 
     <!-- 代理对话框 -->
-    <el-dialog v-model="proxyDialogVisible" :title="dialogTitle" width="600px">
-      <el-form :model="proxyForm" label-width="100px">
-        <el-form-item label="名称">
-          <el-input v-model="proxyForm.name" />
-        </el-form-item>
-        <el-form-item label="类型">
-          <el-select v-model="proxyForm.type">
-            <el-option label="Shadowsocks" value="ss" />
-            <el-option label="VMess" value="vmess" />
-            <el-option label="Trojan" value="trojan" />
-            <el-option label="Hysteria2" value="hysteria2" />
-            <el-option label="VLESS" value="vless" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="服务器">
-          <el-input v-model="proxyForm.server" />
-        </el-form-item>
-        <el-form-item label="端口">
-          <el-input-number v-model="proxyForm.port" :min="1" :max="65535" />
-        </el-form-item>
-        <el-form-item label="配置">
-          <el-input v-model="proxyForm.configJson" type="textarea" :rows="6" placeholder='{"password": "xxx"}' />
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="proxyForm.is_active" />
-        </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="proxyForm.sort_order" :min="0" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="proxyDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveProxy">保存</el-button>
-      </template>
-    </el-dialog>
+    <a-modal v-model:open="proxyDialogVisible" :title="dialogTitle" width="600px" @ok="saveProxy">
+      <a-form :model="proxyForm" :label-col="{ span: 6 }">
+        <a-form-item label="名称">
+          <a-input v-model:value="proxyForm.name" />
+        </a-form-item>
+        <a-form-item label="类型">
+          <a-select v-model:value="proxyForm.type">
+            <a-select-option value="ss">Shadowsocks</a-select-option>
+            <a-select-option value="vmess">VMess</a-select-option>
+            <a-select-option value="trojan">Trojan</a-select-option>
+            <a-select-option value="hysteria2">Hysteria2</a-select-option>
+            <a-select-option value="vless">VLESS</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="服务器">
+          <a-input v-model:value="proxyForm.server" />
+        </a-form-item>
+        <a-form-item label="端口">
+          <a-input-number v-model:value="proxyForm.port" :min="1" :max="65535" style="width: 100%" />
+        </a-form-item>
+        <a-form-item label="配置">
+          <a-textarea v-model:value="proxyForm.configJson" :rows="6" placeholder='{"password": "xxx"}' />
+        </a-form-item>
+        <a-form-item label="启用">
+          <a-switch v-model:checked="proxyForm.is_active" />
+        </a-form-item>
+        <a-form-item label="排序">
+          <a-input-number v-model:value="proxyForm.sort_order" :min="0" style="width: 100%" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
 
     <!-- 代理组对话框 -->
-    <el-dialog v-model="groupDialogVisible" :title="dialogTitle" width="600px">
-      <el-form :model="groupForm" label-width="100px">
-        <el-form-item label="名称">
-          <el-input v-model="groupForm.name" />
-        </el-form-item>
-        <el-form-item label="类型">
-          <el-select v-model="groupForm.type">
-            <el-option label="手动选择" value="select" />
-            <el-option label="自动测速" value="url-test" />
-            <el-option label="故障转移" value="fallback" />
-            <el-option label="负载均衡" value="load-balance" />
-            <el-option label="链式代理" value="relay" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="代理列表">
-          <el-input v-model="groupForm.proxiesText" type="textarea" :rows="4" placeholder="每行一个代理名称" />
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="groupForm.is_active" />
-        </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="groupForm.sort_order" :min="0" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="groupDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveGroup">保存</el-button>
-      </template>
-    </el-dialog>
+    <a-modal v-model:open="groupDialogVisible" :title="dialogTitle" width="600px" @ok="saveGroup">
+      <a-form :model="groupForm" :label-col="{ span: 6 }">
+        <a-form-item label="名称">
+          <a-input v-model:value="groupForm.name" />
+        </a-form-item>
+        <a-form-item label="类型">
+          <a-select v-model:value="groupForm.type">
+            <a-select-option value="select">手动选择</a-select-option>
+            <a-select-option value="url-test">自动测速</a-select-option>
+            <a-select-option value="fallback">故障转移</a-select-option>
+            <a-select-option value="load-balance">负载均衡</a-select-option>
+            <a-select-option value="relay">链式代理</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="代理列表">
+          <a-textarea v-model:value="groupForm.proxiesText" :rows="4" placeholder="每行一个代理名称" />
+        </a-form-item>
+        <a-form-item label="启用">
+          <a-switch v-model:checked="groupForm.is_active" />
+        </a-form-item>
+        <a-form-item label="排序">
+          <a-input-number v-model:value="groupForm.sort_order" :min="0" style="width: 100%" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
 
     <!-- 规则对话框 -->
-    <el-dialog v-model="ruleDialogVisible" :title="dialogTitle" width="600px">
-      <el-form :model="ruleForm" label-width="100px">
-        <el-form-item label="类型">
-          <el-select v-model="ruleForm.rule_type">
-            <el-option label="DOMAIN" value="DOMAIN" />
-            <el-option label="DOMAIN-SUFFIX" value="DOMAIN-SUFFIX" />
-            <el-option label="DOMAIN-KEYWORD" value="DOMAIN-KEYWORD" />
-            <el-option label="IP-CIDR" value="IP-CIDR" />
-            <el-option label="GEOIP" value="GEOIP" />
-            <el-option label="PROCESS-NAME" value="PROCESS-NAME" />
-            <el-option label="MATCH" value="MATCH" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="值">
-          <el-input v-model="ruleForm.rule_value" placeholder="例如: google.com" />
-        </el-form-item>
-        <el-form-item label="代理组">
-          <el-input v-model="ruleForm.proxy_group" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="ruleForm.description" />
-        </el-form-item>
-        <el-form-item label="优先级">
-          <el-input-number v-model="ruleForm.sort_order" :min="0" />
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="ruleForm.is_active" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="ruleDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveRule">保存</el-button>
-      </template>
-    </el-dialog>
+    <a-modal v-model:open="ruleDialogVisible" :title="dialogTitle" width="600px" @ok="saveRule">
+      <a-form :model="ruleForm" :label-col="{ span: 6 }">
+        <a-form-item label="类型">
+          <a-select v-model:value="ruleForm.rule_type">
+            <a-select-option value="DOMAIN">DOMAIN</a-select-option>
+            <a-select-option value="DOMAIN-SUFFIX">DOMAIN-SUFFIX</a-select-option>
+            <a-select-option value="DOMAIN-KEYWORD">DOMAIN-KEYWORD</a-select-option>
+            <a-select-option value="IP-CIDR">IP-CIDR</a-select-option>
+            <a-select-option value="GEOIP">GEOIP</a-select-option>
+            <a-select-option value="PROCESS-NAME">PROCESS-NAME</a-select-option>
+            <a-select-option value="MATCH">MATCH</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="值">
+          <a-input v-model:value="ruleForm.rule_value" placeholder="例如: google.com" />
+        </a-form-item>
+        <a-form-item label="代理组">
+          <a-input v-model:value="ruleForm.proxy_group" />
+        </a-form-item>
+        <a-form-item label="描述">
+          <a-input v-model:value="ruleForm.description" />
+        </a-form-item>
+        <a-form-item label="优先级">
+          <a-input-number v-model:value="ruleForm.sort_order" :min="0" style="width: 100%" />
+        </a-form-item>
+        <a-form-item label="启用">
+          <a-switch v-model:checked="ruleForm.is_active" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { message } from 'ant-design-vue'
 import api from '@/api'
 
 const activeTab = ref('proxies')
 const loading = ref(false)
+
+// 表格列定义
+const proxyColumns = [
+  { title: '名称', dataIndex: 'name', key: 'name', width: 150 },
+  { title: '类型', dataIndex: 'type', key: 'type', width: 100 },
+  { title: '服务器', dataIndex: 'server', key: 'server', width: 200 },
+  { title: '端口', dataIndex: 'port', key: 'port', width: 80 },
+  { title: '状态', key: 'is_active', width: 80 },
+  { title: '排序', dataIndex: 'sort_order', key: 'sort_order', width: 80 },
+  { title: '操作', key: 'action', width: 200 }
+]
+
+const groupColumns = [
+  { title: '名称', dataIndex: 'name', key: 'name', width: 150 },
+  { title: '类型', dataIndex: 'type', key: 'type', width: 120 },
+  { title: '代理列表', key: 'proxies' },
+  { title: '状态', key: 'is_active', width: 80 },
+  { title: '操作', key: 'action', width: 200 }
+]
+
+const ruleColumns = [
+  { title: '类型', dataIndex: 'rule_type', key: 'rule_type', width: 150 },
+  { title: '值', dataIndex: 'rule_value', key: 'rule_value', width: 200 },
+  { title: '代理组', dataIndex: 'proxy_group', key: 'proxy_group', width: 150 },
+  { title: '描述', dataIndex: 'description', key: 'description' },
+  { title: '优先级', dataIndex: 'sort_order', key: 'sort_order', width: 80 },
+  { title: '状态', key: 'is_active', width: 80 },
+  { title: '操作', key: 'action', width: 200 }
+]
 
 // 数据
 const proxies = ref([])
@@ -275,7 +291,7 @@ const loadProxies = async () => {
     const res = await api.get('/admin/clash/proxies')
     proxies.value = res.data
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '加载失败')
+    message.error(error.response?.data?.error?.message || '加载失败')
   } finally {
     loading.value = false
   }
@@ -287,7 +303,7 @@ const loadGroups = async () => {
     const res = await api.get('/admin/clash/proxy-groups')
     groups.value = res.data
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '加载失败')
+    message.error(error.response?.data?.error?.message || '加载失败')
   } finally {
     loading.value = false
   }
@@ -299,7 +315,7 @@ const loadRules = async () => {
     const res = await api.get('/admin/clash/rules')
     rules.value = res.data
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '加载失败')
+    message.error(error.response?.data?.error?.message || '加载失败')
   } finally {
     loading.value = false
   }
@@ -352,31 +368,26 @@ const saveProxy = async () => {
     
     if (dialogMode.value === 'create') {
       await api.post('/admin/clash/proxies', data)
-      ElMessage.success('添加成功')
+      message.success('添加成功')
     } else {
       await api.put(`/admin/clash/proxies/${proxyForm.value.id}`, data)
-      ElMessage.success('更新成功')
+      message.success('更新成功')
     }
     
     proxyDialogVisible.value = false
     loadProxies()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '保存失败')
+    message.error(error.response?.data?.error?.message || '保存失败')
   }
 }
 
 const deleteProxy = async (id: number) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个代理吗？', '提示', {
-      type: 'warning'
-    })
     await api.delete(`/admin/clash/proxies/${id}`)
-    ElMessage.success('删除成功')
+    message.success('删除成功')
     loadProxies()
   } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error(error.response?.data?.error?.message || '删除失败')
-    }
+    message.error(error.response?.data?.error?.message || '删除失败')
   }
 }
 
@@ -421,31 +432,26 @@ const saveGroup = async () => {
     
     if (dialogMode.value === 'create') {
       await api.post('/admin/clash/proxy-groups', data)
-      ElMessage.success('添加成功')
+      message.success('添加成功')
     } else {
       await api.put(`/admin/clash/proxy-groups/${groupForm.value.id}`, data)
-      ElMessage.success('更新成功')
+      message.success('更新成功')
     }
     
     groupDialogVisible.value = false
     loadGroups()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '保存失败')
+    message.error(error.response?.data?.error?.message || '保存失败')
   }
 }
 
 const deleteGroup = async (id: number) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个代理组吗？', '提示', {
-      type: 'warning'
-    })
     await api.delete(`/admin/clash/proxy-groups/${id}`)
-    ElMessage.success('删除成功')
+    message.success('删除成功')
     loadGroups()
   } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error(error.response?.data?.error?.message || '删除失败')
-    }
+    message.error(error.response?.data?.error?.message || '删除失败')
   }
 }
 
@@ -484,31 +490,26 @@ const saveRule = async () => {
     
     if (dialogMode.value === 'create') {
       await api.post('/admin/clash/rules', data)
-      ElMessage.success('添加成功')
+      message.success('添加成功')
     } else {
       await api.put(`/admin/clash/rules/${ruleForm.value.id}`, data)
-      ElMessage.success('更新成功')
+      message.success('更新成功')
     }
     
     ruleDialogVisible.value = false
     loadRules()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '保存失败')
+    message.error(error.response?.data?.error?.message || '保存失败')
   }
 }
 
 const deleteRule = async (id: number) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个规则吗？', '提示', {
-      type: 'warning'
-    })
     await api.delete(`/admin/clash/rules/${id}`)
-    ElMessage.success('删除成功')
+    message.success('删除成功')
     loadRules()
   } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error(error.response?.data?.error?.message || '删除失败')
-    }
+    message.error(error.response?.data?.error?.message || '删除失败')
   }
 }
 
@@ -518,9 +519,9 @@ const generateConfig = async () => {
   try {
     const res = await api.get('/admin/clash/generate')
     generatedConfig.value = res.data
-    ElMessage.success('配置生成成功')
+    message.success('配置生成成功')
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || '生成失败')
+    message.error(error.response?.data?.error?.message || '生成失败')
   } finally {
     loading.value = false
   }
