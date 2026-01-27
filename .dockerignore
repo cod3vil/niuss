@@ -60,5 +60,4 @@ docs/
 examples/
 tests/
 
-# Keep Cargo.lock - it's needed for reproducible builds
-!Cargo.lock
+# NOTE: Cargo.lock is NOT excluded - it's needed for reproducible builds
