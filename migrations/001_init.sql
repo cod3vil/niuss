@@ -176,9 +176,9 @@ INSERT INTO packages (name, traffic_amount, price, duration_days, description) V
     ('旗舰套餐', 536870912000, 4000, 90, '500GB 流量，有效期 90 天');
 
 -- Create default admin user (password: admin123)
--- Note: This is a placeholder hash, will be replaced with proper hash in production
+-- IMPORTANT: Change this password immediately after deployment!
 INSERT INTO users (email, password_hash, is_admin, status) VALUES
-    ('admin@example.com', '$argon2id$v=19$m=19456,t=2,p=1$placeholder$placeholder', true, 'active');
+    ('admin@example.com', '$argon2id$v=19$m=19456,t=2,p=1$6HqspZKtuGhEhGzqaKfWvA$vh5qa/0HFo6HIhbywr0nkr/voSPNNsdbqM6vA6o2XKU', true, 'active');
 
 COMMENT ON TABLE users IS '用户表';
 COMMENT ON TABLE packages IS '流量套餐表';

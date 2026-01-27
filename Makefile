@@ -76,7 +76,31 @@ db-reset: ## Reset database (WARNING: deletes all data)
 	./scripts/db_manage.sh reset
 
 db-migrate: ## Run database migrations
-	docker-compose exec postgres psql -U vpn_user -d vpn_platform -f /docker-entrypoint-initdb.d/001_init.sql
+	@echo "Running database migrations..."
+	@docker-compose exec -T postgres psql -U vpn_user -d vpn_platform < migrations/001_init.sql
+	@echo "✓ Database migrations completed"
+
+db-init: ## Initialize database (run migrations)
+	@echo "Initializing database..."
+	@echo "Waiting for PostgreSQL to be ready..."
+	@until docker-compose exec -T postgres pg_isready -U vpn_user > /dev/null 2>&1; do \
+		echo "Waiting for database..."; \
+		sleep 2; \
+	done
+	@echo "Checking if database is already initialized..."
+	@TABLES=$$(docker-compose exec -T postgres psql -U vpn_user -d vpn_platform -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='users';" 2>/dev/null || echo "0"); \
+	if [ "$$TABLES" = "0" ]; then \
+		echo "Running initialization script..."; \
+		docker-compose exec -T postgres psql -U vpn_user -d vpn_platform < migrations/001_init.sql; \
+		echo "✓ Database initialized successfully"; \
+	else \
+		echo "Database already initialized, skipping"; \
+	fi
+
+db-seed: ## Load test data (development only)
+	@echo "Loading test data..."
+	@docker-compose exec -T postgres psql -U vpn_user -d vpn_platform < migrations/002_seed_test_data.sql
+	@echo "✓ Test data loaded"
 
 db-shell: ## Open PostgreSQL shell
 	docker-compose exec postgres psql -U vpn_user -d vpn_platform
@@ -109,8 +133,23 @@ deploy: ## Deploy all services (build and start)
 	docker-compose up -d
 	@echo "Waiting for services to be ready..."
 	@sleep 10
+	@echo "Initializing database..."
+	@make db-init
 	@echo "Checking health..."
 	@make health-check
+	@echo ""
+	@echo "✓ Deployment complete!"
+	@echo ""
+	@echo "Access the platform:"
+	@echo "  User Frontend: http://localhost"
+	@echo "  Admin Panel:   http://localhost:8081"
+	@echo "  API:           http://localhost:8080"
+	@echo ""
+	@echo "Default admin credentials:"
+	@echo "  Email:    admin@example.com"
+	@echo "  Password: admin123"
+	@echo ""
+	@echo "⚠️  Please change the admin password immediately!"
 
 deploy-prod: ## Deploy for production (with optimizations)
 	@echo "Building production images..."

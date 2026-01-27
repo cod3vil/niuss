@@ -23,6 +23,14 @@
 
 ### 快速部署
 
+部署脚本会自动完成以下操作：
+1. 检查并安装 Docker 和 Docker Compose
+2. 配置环境变量
+3. 构建并启动所有服务
+4. **自动运行数据库迁移和初始化**
+5. 配置防火墙（可选）
+6. 配置 SSL 证书（可选）
+
 #### 1. 基础部署（不配置 SSL）
 
 ```bash
@@ -63,7 +71,7 @@ sudo bash deploy_platform.sh \
 ### 默认管理员账号
 
 ```
-用户名: admin
+邮箱: admin@example.com
 密码: admin123
 ```
 

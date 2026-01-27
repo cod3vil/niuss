@@ -352,6 +352,56 @@ deploy_services() {
     log_info "等待服务启动..."
     sleep 10
 
+    # 等待数据库就绪
+    log_info "等待数据库就绪..."
+    local db_ready=false
+    for i in {1..30}; do
+        if docker compose exec -T postgres pg_isready -U vpn_user > /dev/null 2>&1; then
+            log_info "数据库已就绪"
+            db_ready=true
+            break
+        fi
+        log_info "等待数据库启动... ($i/30)"
+        sleep 2
+    done
+
+    if [ "$db_ready" = false ]; then
+        log_error "数据库启动超时"
+        exit 1
+    fi
+
+    # 运行数据库迁移
+    log_info "运行数据库迁移..."
+    
+    # 检查数据库是否已初始化
+    local tables_exist=$(docker compose exec -T postgres psql -U vpn_user -d vpn_platform -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='users';" 2>/dev/null || echo "0")
+    
+    if [ "$tables_exist" = "0" ]; then
+        log_info "初始化数据库..."
+        
+        # 运行初始化脚本
+        if [ -f "migrations/001_init.sql" ]; then
+            docker compose exec -T postgres psql -U vpn_user -d vpn_platform < migrations/001_init.sql
+            if [ $? -eq 0 ]; then
+                log_info "✓ 数据库初始化完成"
+            else
+                log_error "✗ 数据库初始化失败"
+                exit 1
+            fi
+        else
+            log_error "找不到数据库初始化脚本: migrations/001_init.sql"
+            exit 1
+        fi
+        
+        # 可选：运行测试数据脚本（仅开发环境）
+        if [ -f "migrations/002_seed_test_data.sql" ] && [ "${ENVIRONMENT:-production}" = "development" ]; then
+            log_info "加载测试数据..."
+            docker compose exec -T postgres psql -U vpn_user -d vpn_platform < migrations/002_seed_test_data.sql
+        fi
+    else
+        log_info "数据库已存在，跳过初始化"
+    fi
+
     # 检查服务状态
     log_info "检查服务状态..."
     docker compose ps
@@ -586,7 +636,7 @@ show_deployment_info() {
     fi
     echo ""
     echo "默认管理员账号:"
-    echo "  用户名: admin"
+    echo "  邮箱: admin@example.com"
     echo "  密码: admin123"
     echo "  ⚠️  请立即登录并修改密码！"
     echo ""

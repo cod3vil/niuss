@@ -216,6 +216,26 @@ test_database() {
     else
         print_fail "No default packages found"
     fi
+    
+    print_test "Checking admin user..."
+    local admin_exists=$(docker-compose exec -T postgres psql -U vpn_user -d vpn_platform -t -c "SELECT COUNT(*) FROM users WHERE email = 'admin@example.com' AND is_admin = true;" 2>/dev/null | tr -d ' ')
+    
+    if [ "$admin_exists" = "1" ]; then
+        print_pass "Admin user created"
+        
+        # Check if password hash is valid (not placeholder)
+        local hash=$(docker-compose exec -T postgres psql -U vpn_user -d vpn_platform -t -c "SELECT password_hash FROM users WHERE email = 'admin@example.com';" 2>/dev/null | tr -d ' ')
+        
+        if [[ "$hash" == \$argon2id* ]] && [[ "$hash" != *placeholder* ]]; then
+            print_pass "Admin password hash is valid"
+        else
+            print_fail "Admin password hash is invalid or placeholder"
+            return 1
+        fi
+    else
+        print_fail "Admin user not found"
+        return 1
+    fi
 }
 
 # Test 6: Redis connectivity

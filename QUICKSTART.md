@@ -67,6 +67,14 @@ make deploy
 ./scripts/test_deployment.sh
 ```
 
+The `make deploy` command will:
+- Build all Docker images
+- Start all services
+- Wait for services to be ready
+- **Automatically initialize the database with migrations**
+- Run health checks
+- Display access information
+
 ### 3. Access the Platform
 
 Once deployed, access:
@@ -79,7 +87,7 @@ Once deployed, access:
 - Email: `admin@example.com`
 - Password: `admin123`
 
-⚠️ **Change the admin password immediately after first login!**
+⚠️ **IMPORTANT: Change the admin password immediately after first login!**
 
 ## What's Running?
 
