@@ -239,6 +239,99 @@ pub struct StatsOverview {
     pub online_nodes: i64,
 }
 
+// ============================================================================
+// Clash Configuration Models
+// ============================================================================
+
+/// ClashProxy model representing a Clash proxy configuration
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ClashProxy {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "type")]
+    pub proxy_type: String,
+    pub server: String,
+    pub port: i32,
+    pub config: serde_json::Value,
+    pub is_active: bool,
+    pub sort_order: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// ClashProxyGroup model representing a Clash proxy group
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ClashProxyGroup {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "type")]
+    pub group_type: String,
+    pub proxies: Vec<String>,
+    pub url: Option<String>,
+    pub interval: Option<i32>,
+    pub tolerance: Option<i32>,
+    pub is_active: bool,
+    pub sort_order: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// ClashRule model representing a Clash routing rule
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ClashRule {
+    pub id: i64,
+    pub rule_type: String,
+    pub rule_value: Option<String>,
+    pub proxy_group: String,
+    pub no_resolve: bool,
+    pub is_active: bool,
+    pub sort_order: i32,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body for creating/updating a Clash proxy
+#[derive(Debug, Deserialize)]
+pub struct ClashProxyRequest {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub proxy_type: String,
+    pub server: String,
+    pub port: i32,
+    pub config: serde_json::Value,
+    pub is_active: Option<bool>,
+    pub sort_order: Option<i32>,
+}
+
+/// Request body for creating/updating a Clash proxy group
+#[derive(Debug, Deserialize)]
+pub struct ClashProxyGroupRequest {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub group_type: String,
+    pub proxies: Vec<String>,
+    pub url: Option<String>,
+    pub interval: Option<i32>,
+    pub tolerance: Option<i32>,
+    pub is_active: Option<bool>,
+    pub sort_order: Option<i32>,
+}
+
+/// Request body for creating/updating a Clash rule
+#[derive(Debug, Deserialize)]
+pub struct ClashRuleRequest {
+    pub rule_type: String,
+    pub rule_value: Option<String>,
+    pub proxy_group: String,
+    pub no_resolve: Option<bool>,
+    pub is_active: Option<bool>,
+    pub sort_order: Option<i32>,
+    pub description: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

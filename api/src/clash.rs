@@ -143,6 +143,243 @@ pub fn generate_clash_config(nodes: &[Node]) -> Result<String> {
     Ok(yaml)
 }
 
+/// Generate Clash configuration from database models
+pub fn generate_clash_config_from_db(
+    db_proxies: &[crate::models::ClashProxy],
+    db_proxy_groups: &[crate::models::ClashProxyGroup],
+    db_rules: &[crate::models::ClashRule],
+) -> Result<String> {
+    // Convert database proxies to Clash proxies
+    let mut proxies = Vec::new();
+    for db_proxy in db_proxies {
+        let proxy = db_proxy_to_clash_proxy(db_proxy)?;
+        proxies.push(proxy);
+    }
+
+    // Convert database proxy groups to Clash proxy groups
+    let proxy_groups: Vec<ProxyGroup> = db_proxy_groups
+        .iter()
+        .map(|g| ProxyGroup {
+            name: g.name.clone(),
+            group_type: g.group_type.clone(),
+            proxies: g.proxies.clone(),
+        })
+        .collect();
+
+    // Convert database rules to Clash rules
+    let rules: Vec<String> = db_rules
+        .iter()
+        .map(|r| {
+            let mut rule = format!("{}", r.rule_type);
+            if let Some(ref value) = r.rule_value {
+                rule.push_str(&format!(",{}", value));
+            }
+            rule.push_str(&format!(",{}", r.proxy_group));
+            if r.no_resolve {
+                rule.push_str(",no-resolve");
+            }
+            rule
+        })
+        .collect();
+
+    let config = ClashConfig {
+        proxies,
+        proxy_groups,
+        rules,
+    };
+
+    // Serialize to YAML
+    let yaml = serde_yaml::to_string(&config)
+        .map_err(|e| anyhow!("Failed to serialize Clash config: {}", e))?;
+
+    Ok(yaml)
+}
+
+/// Convert database ClashProxy to Clash proxy enum
+fn db_proxy_to_clash_proxy(db_proxy: &crate::models::ClashProxy) -> Result<ClashProxy> {
+    match db_proxy.proxy_type.as_str() {
+        "ss" => {
+            let cipher = db_proxy.config
+                .get("cipher")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'cipher' in Shadowsocks config"))?
+                .to_string();
+            
+            let password = db_proxy.config
+                .get("password")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'password' in Shadowsocks config"))?
+                .to_string();
+
+            Ok(ClashProxy::Shadowsocks {
+                name: db_proxy.name.clone(),
+                server: db_proxy.server.clone(),
+                port: db_proxy.port as u16,
+                cipher,
+                password,
+                udp: db_proxy.config.get("udp").and_then(|v| v.as_bool()).unwrap_or(true),
+            })
+        }
+        "vmess" => {
+            let uuid = db_proxy.config
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'uuid' in VMess config"))?
+                .to_string();
+            
+            let alter_id = db_proxy.config
+                .get("alterId")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u16;
+            
+            let cipher = db_proxy.config
+                .get("cipher")
+                .and_then(|v| v.as_str())
+                .unwrap_or("auto")
+                .to_string();
+            
+            let network = db_proxy.config
+                .get("network")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tcp")
+                .to_string();
+
+            Ok(ClashProxy::VMess {
+                name: db_proxy.name.clone(),
+                server: db_proxy.server.clone(),
+                port: db_proxy.port as u16,
+                uuid,
+                alter_id,
+                cipher,
+                udp: db_proxy.config.get("udp").and_then(|v| v.as_bool()).unwrap_or(true),
+                network,
+            })
+        }
+        "trojan" => {
+            let password = db_proxy.config
+                .get("password")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'password' in Trojan config"))?
+                .to_string();
+            
+            let sni = db_proxy.config
+                .get("sni")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            
+            let skip_cert_verify = db_proxy.config
+                .get("skip-cert-verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            Ok(ClashProxy::Trojan {
+                name: db_proxy.name.clone(),
+                server: db_proxy.server.clone(),
+                port: db_proxy.port as u16,
+                password,
+                udp: db_proxy.config.get("udp").and_then(|v| v.as_bool()).unwrap_or(true),
+                sni,
+                skip_cert_verify,
+            })
+        }
+        "hysteria2" => {
+            let password = db_proxy.config
+                .get("password")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'password' in Hysteria2 config"))?
+                .to_string();
+            
+            let obfs = db_proxy.config
+                .get("obfs")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            
+            let obfs_password = db_proxy.config
+                .get("obfs-password")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            
+            let sni = db_proxy.config
+                .get("sni")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            
+            let skip_cert_verify = db_proxy.config
+                .get("skip-cert-verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            Ok(ClashProxy::Hysteria2 {
+                name: db_proxy.name.clone(),
+                server: db_proxy.server.clone(),
+                port: db_proxy.port as u16,
+                password,
+                obfs,
+                obfs_password,
+                sni,
+                skip_cert_verify,
+            })
+        }
+        "vless" => {
+            let uuid = db_proxy.config
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing 'uuid' in VLESS config"))?
+                .to_string();
+            
+            let flow = db_proxy.config
+                .get("flow")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            
+            let network = db_proxy.config
+                .get("network")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tcp")
+                .to_string();
+            
+            let reality_opts = if let Some(reality) = db_proxy.config.get("reality-opts") {
+                let public_key = reality
+                    .get("public-key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow!("Missing 'public-key' in Reality config"))?
+                    .to_string();
+                
+                let short_id = reality
+                    .get("short-id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                
+                Some(RealityOpts {
+                    public_key,
+                    short_id,
+                })
+            } else {
+                None
+            };
+            
+            let client_fingerprint = db_proxy.config
+                .get("client-fingerprint")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some("chrome".to_string()));
+
+            Ok(ClashProxy::VLESS {
+                name: db_proxy.name.clone(),
+                server: db_proxy.server.clone(),
+                port: db_proxy.port as u16,
+                uuid,
+                flow,
+                network,
+                reality_opts,
+                client_fingerprint,
+            })
+        }
+        _ => Err(anyhow!("Unsupported proxy type: {}", db_proxy.proxy_type)),
+    }
+}
+
 /// Convert a Node to a ClashProxy
 fn node_to_clash_proxy(node: &Node) -> Result<ClashProxy> {
     match node.protocol.as_str() {

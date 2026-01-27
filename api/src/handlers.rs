@@ -157,6 +157,20 @@ pub fn create_router(
         .route("/api/admin/stats/overview", get(admin_stats_overview_handler))
         .route("/api/admin/stats/revenue", get(admin_stats_revenue_handler))
         .route("/api/admin/stats/traffic", get(admin_stats_traffic_handler))
+        // Admin Clash configuration endpoints
+        .route("/api/admin/clash/proxies", get(admin_list_clash_proxies_handler))
+        .route("/api/admin/clash/proxies", post(admin_create_clash_proxy_handler))
+        .route("/api/admin/clash/proxies/:id", put(admin_update_clash_proxy_handler))
+        .route("/api/admin/clash/proxies/:id", delete(admin_delete_clash_proxy_handler))
+        .route("/api/admin/clash/proxy-groups", get(admin_list_clash_proxy_groups_handler))
+        .route("/api/admin/clash/proxy-groups", post(admin_create_clash_proxy_group_handler))
+        .route("/api/admin/clash/proxy-groups/:id", put(admin_update_clash_proxy_group_handler))
+        .route("/api/admin/clash/proxy-groups/:id", delete(admin_delete_clash_proxy_group_handler))
+        .route("/api/admin/clash/rules", get(admin_list_clash_rules_handler))
+        .route("/api/admin/clash/rules", post(admin_create_clash_rule_handler))
+        .route("/api/admin/clash/rules/:id", put(admin_update_clash_rule_handler))
+        .route("/api/admin/clash/rules/:id", delete(admin_delete_clash_rule_handler))
+        .route("/api/admin/clash/generate", get(admin_generate_clash_config_handler))
         .layer(cors)
         .with_state(state)
 }
@@ -1163,9 +1177,30 @@ async fn get_subscription_config_handler(
     // Get active nodes
     let nodes = db::list_nodes_by_status(&state.db_pool, "online").await?;
 
+    // Try to get Clash configuration from database first
+    let proxies = db::list_clash_proxies(&state.db_pool, true).await.ok();
+    let proxy_groups = db::list_clash_proxy_groups(&state.db_pool, true).await.ok();
+    let rules = db::list_clash_rules(&state.db_pool, true).await.ok();
+
     // Generate Clash configuration
-    let clash_config = crate::clash::generate_clash_config(&nodes)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to generate config: {}", e)))?;
+    let clash_config = if let (Some(p), Some(pg), Some(r)) = (proxies, proxy_groups, rules) {
+        // Use database configuration if available
+        if !p.is_empty() && !pg.is_empty() && !r.is_empty() {
+            tracing::info!("Using database Clash configuration for user {}", user.id);
+            crate::clash::generate_clash_config_from_db(&p, &pg, &r)
+                .map_err(|e| ApiError::InternalServerError(format!("Failed to generate config: {}", e)))?
+        } else {
+            // Fall back to node-based configuration
+            tracing::info!("Using node-based Clash configuration for user {}", user.id);
+            crate::clash::generate_clash_config(&nodes)
+                .map_err(|e| ApiError::InternalServerError(format!("Failed to generate config: {}", e)))?
+        }
+    } else {
+        // Fall back to node-based configuration
+        tracing::info!("Using node-based Clash configuration for user {}", user.id);
+        crate::clash::generate_clash_config(&nodes)
+            .map_err(|e| ApiError::InternalServerError(format!("Failed to generate config: {}", e)))?
+    };
 
     // Cache the configuration
     if let Err(e) = state.redis_cache.cache_subscription_config(&token, &clash_config).await {
@@ -2310,4 +2345,662 @@ async fn admin_stats_traffic_handler(
         "start_date": start_date,
         "end_date": end_date,
     })))
+}
+
+
+// ============================================================================
+// Clash Configuration Management Handlers
+// ============================================================================
+
+/// GET /api/admin/clash/proxies - Get all Clash proxies (admin only)
+async fn admin_list_clash_proxies_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<crate::models::ClashProxy>>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Parse active_only parameter
+    let active_only = params
+        .get("active_only")
+        .and_then(|s| s.parse::<bool>().ok())
+        .unwrap_or(false);
+
+    // Get proxies from database
+    let proxies = db::list_clash_proxies(&state.db_pool, active_only).await?;
+
+    Ok(Json(proxies))
+}
+
+/// POST /api/admin/clash/proxies - Create a new Clash proxy (admin only)
+async fn admin_create_clash_proxy_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::models::ClashProxyRequest>,
+) -> Result<Json<crate::models::ClashProxy>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Validate port range
+    if payload.port < 1 || payload.port > 65535 {
+        return Err(ApiError::BadRequest("Port must be between 1 and 65535".to_string()));
+    }
+
+    // Validate proxy type
+    let valid_types = ["ss", "vmess", "trojan", "hysteria2", "vless"];
+    if !valid_types.contains(&payload.proxy_type.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid proxy type. Must be one of: {}",
+            valid_types.join(", ")
+        )));
+    }
+
+    // Create proxy in database
+    let proxy = db::create_clash_proxy(
+        &state.db_pool,
+        &payload.name,
+        &payload.proxy_type,
+        &payload.server,
+        payload.port,
+        &payload.config,
+        payload.is_active.unwrap_or(true),
+        payload.sort_order.unwrap_or(0),
+    )
+    .await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "create_clash_proxy",
+        Some("clash_proxy"),
+        Some(proxy.id),
+        Some(json!({
+            "proxy_name": &payload.name,
+            "proxy_type": &payload.proxy_type,
+        })),
+    )
+    .await;
+
+    Ok(Json(proxy))
+}
+
+/// PUT /api/admin/clash/proxies/:id - Update a Clash proxy (admin only)
+async fn admin_update_clash_proxy_handler(
+    State(state): State<AppState>,
+    Path(proxy_id): Path<i64>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::models::ClashProxyRequest>,
+) -> Result<Json<crate::models::ClashProxy>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Check if proxy exists
+    let _existing_proxy = db::get_clash_proxy_by_id(&state.db_pool, proxy_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Proxy not found".to_string()))?;
+
+    // Validate port range
+    if payload.port < 1 || payload.port > 65535 {
+        return Err(ApiError::BadRequest("Port must be between 1 and 65535".to_string()));
+    }
+
+    // Update proxy in database
+    let updated_proxy = db::update_clash_proxy(
+        &state.db_pool,
+        proxy_id,
+        Some(&payload.name),
+        Some(&payload.proxy_type),
+        Some(&payload.server),
+        Some(payload.port),
+        Some(&payload.config),
+        payload.is_active,
+        payload.sort_order,
+    )
+    .await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "update_clash_proxy",
+        Some("clash_proxy"),
+        Some(proxy_id),
+        Some(json!({
+            "proxy_id": proxy_id,
+            "proxy_name": &payload.name,
+        })),
+    )
+    .await;
+
+    Ok(Json(updated_proxy))
+}
+
+/// DELETE /api/admin/clash/proxies/:id - Delete a Clash proxy (admin only)
+async fn admin_delete_clash_proxy_handler(
+    State(state): State<AppState>,
+    Path(proxy_id): Path<i64>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Check if proxy exists
+    let proxy = db::get_clash_proxy_by_id(&state.db_pool, proxy_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Proxy not found".to_string()))?;
+
+    // Delete proxy from database
+    db::delete_clash_proxy(&state.db_pool, proxy_id).await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "delete_clash_proxy",
+        Some("clash_proxy"),
+        Some(proxy_id),
+        Some(json!({
+            "proxy_id": proxy_id,
+            "proxy_name": proxy.name,
+        })),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "message": "Clash proxy deleted successfully",
+        "proxy_id": proxy_id,
+    })))
+}
+
+/// GET /api/admin/clash/proxy-groups - Get all Clash proxy groups (admin only)
+async fn admin_list_clash_proxy_groups_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<crate::models::ClashProxyGroup>>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Parse active_only parameter
+    let active_only = params
+        .get("active_only")
+        .and_then(|s| s.parse::<bool>().ok())
+        .unwrap_or(false);
+
+    // Get proxy groups from database
+    let groups = db::list_clash_proxy_groups(&state.db_pool, active_only).await?;
+
+    Ok(Json(groups))
+}
+
+/// POST /api/admin/clash/proxy-groups - Create a new Clash proxy group (admin only)
+async fn admin_create_clash_proxy_group_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::models::ClashProxyGroupRequest>,
+) -> Result<Json<crate::models::ClashProxyGroup>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Validate group type
+    let valid_types = ["select", "url-test", "fallback", "load-balance", "relay"];
+    if !valid_types.contains(&payload.group_type.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid group type. Must be one of: {}",
+            valid_types.join(", ")
+        )));
+    }
+
+    // Create proxy group in database
+    let group = db::create_clash_proxy_group(
+        &state.db_pool,
+        &payload.name,
+        &payload.group_type,
+        &payload.proxies,
+        payload.url.as_deref(),
+        payload.interval,
+        payload.tolerance,
+        payload.is_active.unwrap_or(true),
+        payload.sort_order.unwrap_or(0),
+    )
+    .await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "create_clash_proxy_group",
+        Some("clash_proxy_group"),
+        Some(group.id),
+        Some(json!({
+            "group_name": &payload.name,
+            "group_type": &payload.group_type,
+        })),
+    )
+    .await;
+
+    Ok(Json(group))
+}
+
+/// PUT /api/admin/clash/proxy-groups/:id - Update a Clash proxy group (admin only)
+async fn admin_update_clash_proxy_group_handler(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::models::ClashProxyGroupRequest>,
+) -> Result<Json<crate::models::ClashProxyGroup>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Check if proxy group exists
+    let _existing_group = db::get_clash_proxy_group_by_id(&state.db_pool, group_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Proxy group not found".to_string()))?;
+
+    // Update proxy group in database
+    let updated_group = db::update_clash_proxy_group(
+        &state.db_pool,
+        group_id,
+        Some(&payload.name),
+        Some(&payload.group_type),
+        Some(&payload.proxies),
+        Some(payload.url.as_deref()),
+        Some(payload.interval),
+        Some(payload.tolerance),
+        payload.is_active,
+        payload.sort_order,
+    )
+    .await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "update_clash_proxy_group",
+        Some("clash_proxy_group"),
+        Some(group_id),
+        Some(json!({
+            "group_id": group_id,
+            "group_name": &payload.name,
+        })),
+    )
+    .await;
+
+    Ok(Json(updated_group))
+}
+
+/// DELETE /api/admin/clash/proxy-groups/:id - Delete a Clash proxy group (admin only)
+async fn admin_delete_clash_proxy_group_handler(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Check if proxy group exists
+    let group = db::get_clash_proxy_group_by_id(&state.db_pool, group_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Proxy group not found".to_string()))?;
+
+    // Delete proxy group from database
+    db::delete_clash_proxy_group(&state.db_pool, group_id).await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "delete_clash_proxy_group",
+        Some("clash_proxy_group"),
+        Some(group_id),
+        Some(json!({
+            "group_id": group_id,
+            "group_name": group.name,
+        })),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "message": "Clash proxy group deleted successfully",
+        "group_id": group_id,
+    })))
+}
+
+/// GET /api/admin/clash/rules - Get all Clash rules (admin only)
+async fn admin_list_clash_rules_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<crate::models::ClashRule>>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Parse active_only parameter
+    let active_only = params
+        .get("active_only")
+        .and_then(|s| s.parse::<bool>().ok())
+        .unwrap_or(false);
+
+    // Get rules from database
+    let rules = db::list_clash_rules(&state.db_pool, active_only).await?;
+
+    Ok(Json(rules))
+}
+
+/// POST /api/admin/clash/rules - Create a new Clash rule (admin only)
+async fn admin_create_clash_rule_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::models::ClashRuleRequest>,
+) -> Result<Json<crate::models::ClashRule>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Validate rule type
+    let valid_types = [
+        "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD",
+        "IP-CIDR", "IP-CIDR6", "SRC-IP-CIDR",
+        "GEOIP", "DST-PORT", "SRC-PORT",
+        "PROCESS-NAME", "MATCH"
+    ];
+    if !valid_types.contains(&payload.rule_type.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid rule type. Must be one of: {}",
+            valid_types.join(", ")
+        )));
+    }
+
+    // Create rule in database
+    let rule = db::create_clash_rule(
+        &state.db_pool,
+        &payload.rule_type,
+        payload.rule_value.as_deref(),
+        &payload.proxy_group,
+        payload.no_resolve.unwrap_or(false),
+        payload.is_active.unwrap_or(true),
+        payload.sort_order.unwrap_or(0),
+        payload.description.as_deref(),
+    )
+    .await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "create_clash_rule",
+        Some("clash_rule"),
+        Some(rule.id),
+        Some(json!({
+            "rule_type": &payload.rule_type,
+            "proxy_group": &payload.proxy_group,
+        })),
+    )
+    .await;
+
+    Ok(Json(rule))
+}
+
+/// PUT /api/admin/clash/rules/:id - Update a Clash rule (admin only)
+async fn admin_update_clash_rule_handler(
+    State(state): State<AppState>,
+    Path(rule_id): Path<i64>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::models::ClashRuleRequest>,
+) -> Result<Json<crate::models::ClashRule>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Check if rule exists
+    let _existing_rule = db::get_clash_rule_by_id(&state.db_pool, rule_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Rule not found".to_string()))?;
+
+    // Update rule in database
+    let updated_rule = db::update_clash_rule(
+        &state.db_pool,
+        rule_id,
+        Some(&payload.rule_type),
+        Some(payload.rule_value.as_deref()),
+        Some(&payload.proxy_group),
+        payload.no_resolve,
+        payload.is_active,
+        payload.sort_order,
+        Some(payload.description.as_deref()),
+    )
+    .await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "update_clash_rule",
+        Some("clash_rule"),
+        Some(rule_id),
+        Some(json!({
+            "rule_id": rule_id,
+            "rule_type": &payload.rule_type,
+        })),
+    )
+    .await;
+
+    Ok(Json(updated_rule))
+}
+
+/// DELETE /api/admin/clash/rules/:id - Delete a Clash rule (admin only)
+async fn admin_delete_clash_rule_handler(
+    State(state): State<AppState>,
+    Path(rule_id): Path<i64>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Check if rule exists
+    let rule = db::get_clash_rule_by_id(&state.db_pool, rule_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Rule not found".to_string()))?;
+
+    // Delete rule from database
+    db::delete_clash_rule(&state.db_pool, rule_id).await?;
+
+    // Log admin action
+    let _ = db::create_admin_log(
+        &state.db_pool,
+        claims.sub,
+        "delete_clash_rule",
+        Some("clash_rule"),
+        Some(rule_id),
+        Some(json!({
+            "rule_id": rule_id,
+            "rule_type": rule.rule_type,
+        })),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "message": "Clash rule deleted successfully",
+        "rule_id": rule_id,
+    })))
+}
+
+/// GET /api/admin/clash/generate - Generate Clash YAML configuration (admin only)
+async fn admin_generate_clash_config_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    // Extract and verify JWT token
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
+
+    // Check if user is admin
+    if !claims.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Get active proxies, proxy groups, and rules from database
+    let proxies = db::list_clash_proxies(&state.db_pool, true).await?;
+    let proxy_groups = db::list_clash_proxy_groups(&state.db_pool, true).await?;
+    let rules = db::list_clash_rules(&state.db_pool, true).await?;
+
+    // Generate Clash configuration
+    let clash_config = crate::clash::generate_clash_config_from_db(&proxies, &proxy_groups, &rules)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to generate config: {}", e)))?;
+
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
+        clash_config,
+    ))
 }

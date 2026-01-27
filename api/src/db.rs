@@ -1057,3 +1057,476 @@ mod tests {
 #[cfg(test)]
 #[path = "db_tests.rs"]
 mod db_tests;
+
+// ============================================================================
+// Clash Configuration Management
+// ============================================================================
+
+/// Create a new Clash proxy
+pub async fn create_clash_proxy(
+    pool: &PgPool,
+    name: &str,
+    proxy_type: &str,
+    server: &str,
+    port: i32,
+    config: &serde_json::Value,
+    is_active: bool,
+    sort_order: i32,
+) -> Result<crate::models::ClashProxy> {
+    let proxy = sqlx::query_as::<_, crate::models::ClashProxy>(
+        r#"
+        INSERT INTO clash_proxies (name, type, server, port, config, is_active, sort_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        "#,
+    )
+    .bind(name)
+    .bind(proxy_type)
+    .bind(server)
+    .bind(port)
+    .bind(config)
+    .bind(is_active)
+    .bind(sort_order)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(proxy)
+}
+
+/// Get Clash proxy by ID
+pub async fn get_clash_proxy_by_id(pool: &PgPool, proxy_id: i64) -> Result<Option<crate::models::ClashProxy>> {
+    let proxy = sqlx::query_as::<_, crate::models::ClashProxy>(
+        r#"
+        SELECT * FROM clash_proxies WHERE id = $1
+        "#,
+    )
+    .bind(proxy_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(proxy)
+}
+
+/// List all Clash proxies
+pub async fn list_clash_proxies(pool: &PgPool, active_only: bool) -> Result<Vec<crate::models::ClashProxy>> {
+    let query = if active_only {
+        "SELECT * FROM clash_proxies WHERE is_active = true ORDER BY sort_order, id"
+    } else {
+        "SELECT * FROM clash_proxies ORDER BY sort_order, id"
+    };
+
+    let proxies = sqlx::query_as::<_, crate::models::ClashProxy>(query)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(proxies)
+}
+
+/// Update Clash proxy
+pub async fn update_clash_proxy(
+    pool: &PgPool,
+    proxy_id: i64,
+    name: Option<&str>,
+    proxy_type: Option<&str>,
+    server: Option<&str>,
+    port: Option<i32>,
+    config: Option<&serde_json::Value>,
+    is_active: Option<bool>,
+    sort_order: Option<i32>,
+) -> Result<crate::models::ClashProxy> {
+    let mut query = String::from("UPDATE clash_proxies SET ");
+    let mut updates = Vec::new();
+    let mut param_count = 1;
+
+    if name.is_some() {
+        updates.push(format!("name = ${}", param_count));
+        param_count += 1;
+    }
+    if proxy_type.is_some() {
+        updates.push(format!("type = ${}", param_count));
+        param_count += 1;
+    }
+    if server.is_some() {
+        updates.push(format!("server = ${}", param_count));
+        param_count += 1;
+    }
+    if port.is_some() {
+        updates.push(format!("port = ${}", param_count));
+        param_count += 1;
+    }
+    if config.is_some() {
+        updates.push(format!("config = ${}", param_count));
+        param_count += 1;
+    }
+    if is_active.is_some() {
+        updates.push(format!("is_active = ${}", param_count));
+        param_count += 1;
+    }
+    if sort_order.is_some() {
+        updates.push(format!("sort_order = ${}", param_count));
+        param_count += 1;
+    }
+
+    if updates.is_empty() {
+        return get_clash_proxy_by_id(pool, proxy_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Proxy not found"));
+    }
+
+    query.push_str(&updates.join(", "));
+    query.push_str(&format!(", updated_at = NOW() WHERE id = ${} RETURNING *", param_count));
+
+    let mut q = sqlx::query_as::<_, crate::models::ClashProxy>(&query);
+
+    if let Some(v) = name {
+        q = q.bind(v);
+    }
+    if let Some(v) = proxy_type {
+        q = q.bind(v);
+    }
+    if let Some(v) = server {
+        q = q.bind(v);
+    }
+    if let Some(v) = port {
+        q = q.bind(v);
+    }
+    if let Some(v) = config {
+        q = q.bind(v);
+    }
+    if let Some(v) = is_active {
+        q = q.bind(v);
+    }
+    if let Some(v) = sort_order {
+        q = q.bind(v);
+    }
+    q = q.bind(proxy_id);
+
+    let proxy = q.fetch_one(pool).await?;
+    Ok(proxy)
+}
+
+/// Delete Clash proxy
+pub async fn delete_clash_proxy(pool: &PgPool, proxy_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM clash_proxies WHERE id = $1")
+        .bind(proxy_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Create a new Clash proxy group
+pub async fn create_clash_proxy_group(
+    pool: &PgPool,
+    name: &str,
+    group_type: &str,
+    proxies: &[String],
+    url: Option<&str>,
+    interval: Option<i32>,
+    tolerance: Option<i32>,
+    is_active: bool,
+    sort_order: i32,
+) -> Result<crate::models::ClashProxyGroup> {
+    let group = sqlx::query_as::<_, crate::models::ClashProxyGroup>(
+        r#"
+        INSERT INTO clash_proxy_groups (name, type, proxies, url, interval, tolerance, is_active, sort_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+        "#,
+    )
+    .bind(name)
+    .bind(group_type)
+    .bind(proxies)
+    .bind(url)
+    .bind(interval)
+    .bind(tolerance)
+    .bind(is_active)
+    .bind(sort_order)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(group)
+}
+
+/// Get Clash proxy group by ID
+pub async fn get_clash_proxy_group_by_id(pool: &PgPool, group_id: i64) -> Result<Option<crate::models::ClashProxyGroup>> {
+    let group = sqlx::query_as::<_, crate::models::ClashProxyGroup>(
+        r#"
+        SELECT * FROM clash_proxy_groups WHERE id = $1
+        "#,
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(group)
+}
+
+/// List all Clash proxy groups
+pub async fn list_clash_proxy_groups(pool: &PgPool, active_only: bool) -> Result<Vec<crate::models::ClashProxyGroup>> {
+    let query = if active_only {
+        "SELECT * FROM clash_proxy_groups WHERE is_active = true ORDER BY sort_order, id"
+    } else {
+        "SELECT * FROM clash_proxy_groups ORDER BY sort_order, id"
+    };
+
+    let groups = sqlx::query_as::<_, crate::models::ClashProxyGroup>(query)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(groups)
+}
+
+/// Update Clash proxy group
+pub async fn update_clash_proxy_group(
+    pool: &PgPool,
+    group_id: i64,
+    name: Option<&str>,
+    group_type: Option<&str>,
+    proxies: Option<&[String]>,
+    url: Option<Option<&str>>,
+    interval: Option<Option<i32>>,
+    tolerance: Option<Option<i32>>,
+    is_active: Option<bool>,
+    sort_order: Option<i32>,
+) -> Result<crate::models::ClashProxyGroup> {
+    let mut query = String::from("UPDATE clash_proxy_groups SET ");
+    let mut updates = Vec::new();
+    let mut param_count = 1;
+
+    if name.is_some() {
+        updates.push(format!("name = ${}", param_count));
+        param_count += 1;
+    }
+    if group_type.is_some() {
+        updates.push(format!("type = ${}", param_count));
+        param_count += 1;
+    }
+    if proxies.is_some() {
+        updates.push(format!("proxies = ${}", param_count));
+        param_count += 1;
+    }
+    if url.is_some() {
+        updates.push(format!("url = ${}", param_count));
+        param_count += 1;
+    }
+    if interval.is_some() {
+        updates.push(format!("interval = ${}", param_count));
+        param_count += 1;
+    }
+    if tolerance.is_some() {
+        updates.push(format!("tolerance = ${}", param_count));
+        param_count += 1;
+    }
+    if is_active.is_some() {
+        updates.push(format!("is_active = ${}", param_count));
+        param_count += 1;
+    }
+    if sort_order.is_some() {
+        updates.push(format!("sort_order = ${}", param_count));
+        param_count += 1;
+    }
+
+    if updates.is_empty() {
+        return get_clash_proxy_group_by_id(pool, group_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Proxy group not found"));
+    }
+
+    query.push_str(&updates.join(", "));
+    query.push_str(&format!(", updated_at = NOW() WHERE id = ${} RETURNING *", param_count));
+
+    let mut q = sqlx::query_as::<_, crate::models::ClashProxyGroup>(&query);
+
+    if let Some(v) = name {
+        q = q.bind(v);
+    }
+    if let Some(v) = group_type {
+        q = q.bind(v);
+    }
+    if let Some(v) = proxies {
+        q = q.bind(v);
+    }
+    if let Some(v) = url {
+        q = q.bind(v);
+    }
+    if let Some(v) = interval {
+        q = q.bind(v);
+    }
+    if let Some(v) = tolerance {
+        q = q.bind(v);
+    }
+    if let Some(v) = is_active {
+        q = q.bind(v);
+    }
+    if let Some(v) = sort_order {
+        q = q.bind(v);
+    }
+    q = q.bind(group_id);
+
+    let group = q.fetch_one(pool).await?;
+    Ok(group)
+}
+
+/// Delete Clash proxy group
+pub async fn delete_clash_proxy_group(pool: &PgPool, group_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM clash_proxy_groups WHERE id = $1")
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Create a new Clash rule
+pub async fn create_clash_rule(
+    pool: &PgPool,
+    rule_type: &str,
+    rule_value: Option<&str>,
+    proxy_group: &str,
+    no_resolve: bool,
+    is_active: bool,
+    sort_order: i32,
+    description: Option<&str>,
+) -> Result<crate::models::ClashRule> {
+    let rule = sqlx::query_as::<_, crate::models::ClashRule>(
+        r#"
+        INSERT INTO clash_rules (rule_type, rule_value, proxy_group, no_resolve, is_active, sort_order, description)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        "#,
+    )
+    .bind(rule_type)
+    .bind(rule_value)
+    .bind(proxy_group)
+    .bind(no_resolve)
+    .bind(is_active)
+    .bind(sort_order)
+    .bind(description)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(rule)
+}
+
+/// Get Clash rule by ID
+pub async fn get_clash_rule_by_id(pool: &PgPool, rule_id: i64) -> Result<Option<crate::models::ClashRule>> {
+    let rule = sqlx::query_as::<_, crate::models::ClashRule>(
+        r#"
+        SELECT * FROM clash_rules WHERE id = $1
+        "#,
+    )
+    .bind(rule_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(rule)
+}
+
+/// List all Clash rules
+pub async fn list_clash_rules(pool: &PgPool, active_only: bool) -> Result<Vec<crate::models::ClashRule>> {
+    let query = if active_only {
+        "SELECT * FROM clash_rules WHERE is_active = true ORDER BY sort_order, id"
+    } else {
+        "SELECT * FROM clash_rules ORDER BY sort_order, id"
+    };
+
+    let rules = sqlx::query_as::<_, crate::models::ClashRule>(query)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rules)
+}
+
+/// Update Clash rule
+pub async fn update_clash_rule(
+    pool: &PgPool,
+    rule_id: i64,
+    rule_type: Option<&str>,
+    rule_value: Option<Option<&str>>,
+    proxy_group: Option<&str>,
+    no_resolve: Option<bool>,
+    is_active: Option<bool>,
+    sort_order: Option<i32>,
+    description: Option<Option<&str>>,
+) -> Result<crate::models::ClashRule> {
+    let mut query = String::from("UPDATE clash_rules SET ");
+    let mut updates = Vec::new();
+    let mut param_count = 1;
+
+    if rule_type.is_some() {
+        updates.push(format!("rule_type = ${}", param_count));
+        param_count += 1;
+    }
+    if rule_value.is_some() {
+        updates.push(format!("rule_value = ${}", param_count));
+        param_count += 1;
+    }
+    if proxy_group.is_some() {
+        updates.push(format!("proxy_group = ${}", param_count));
+        param_count += 1;
+    }
+    if no_resolve.is_some() {
+        updates.push(format!("no_resolve = ${}", param_count));
+        param_count += 1;
+    }
+    if is_active.is_some() {
+        updates.push(format!("is_active = ${}", param_count));
+        param_count += 1;
+    }
+    if sort_order.is_some() {
+        updates.push(format!("sort_order = ${}", param_count));
+        param_count += 1;
+    }
+    if description.is_some() {
+        updates.push(format!("description = ${}", param_count));
+        param_count += 1;
+    }
+
+    if updates.is_empty() {
+        return get_clash_rule_by_id(pool, rule_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Rule not found"));
+    }
+
+    query.push_str(&updates.join(", "));
+    query.push_str(&format!(", updated_at = NOW() WHERE id = ${} RETURNING *", param_count));
+
+    let mut q = sqlx::query_as::<_, crate::models::ClashRule>(&query);
+
+    if let Some(v) = rule_type {
+        q = q.bind(v);
+    }
+    if let Some(v) = rule_value {
+        q = q.bind(v);
+    }
+    if let Some(v) = proxy_group {
+        q = q.bind(v);
+    }
+    if let Some(v) = no_resolve {
+        q = q.bind(v);
+    }
+    if let Some(v) = is_active {
+        q = q.bind(v);
+    }
+    if let Some(v) = sort_order {
+        q = q.bind(v);
+    }
+    if let Some(v) = description {
+        q = q.bind(v);
+    }
+    q = q.bind(rule_id);
+
+    let rule = q.fetch_one(pool).await?;
+    Ok(rule)
+}
+
+/// Delete Clash rule
+pub async fn delete_clash_rule(pool: &PgPool, rule_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM clash_rules WHERE id = $1")
+        .bind(rule_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
