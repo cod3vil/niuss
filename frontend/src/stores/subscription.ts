@@ -14,8 +14,13 @@ export const useSubscriptionStore = defineStore('subscription', () => {
     error.value = null
     
     try {
-      const response = await api.get<Subscription>('/subscription/link')
-      subscription.value = response.data
+      const response = await api.get('/subscription/link')
+      const data = response.data
+      // Backend returns subscription_url, map it to url for frontend
+      subscription.value = {
+        token: data.token,
+        url: data.subscription_url
+      }
     } catch (e: any) {
       error.value = e.response?.data?.error?.message || '获取订阅链接失败'
     } finally {
