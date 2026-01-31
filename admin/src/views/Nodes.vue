@@ -2,15 +2,26 @@
   <div class="nodes">
     <a-card title="节点管理">
       <template #extra>
-        <a-button type="primary" @click="showCreateModal">
-          <PlusOutlined />
-          添加节点
-        </a-button>
+        <a-space>
+          <a-select
+            v-model:value="clashFilter"
+            style="width: 150px"
+            @change="handleFilterChange"
+          >
+            <a-select-option value="all">全部节点</a-select-option>
+            <a-select-option value="included">已包含</a-select-option>
+            <a-select-option value="excluded">未包含</a-select-option>
+          </a-select>
+          <a-button type="primary" @click="showCreateModal">
+            <PlusOutlined />
+            添加节点
+          </a-button>
+        </a-space>
       </template>
 
       <a-table
         :columns="columns"
-        :data-source="nodesStore.nodes"
+        :data-source="filteredNodes"
         :loading="nodesStore.loading"
         :pagination="{ pageSize: 10 }"
         row-key="id"
@@ -32,6 +43,22 @@
           
           <template v-else-if="column.key === 'users'">
             {{ record.current_users }} / {{ record.max_users }}
+          </template>
+          
+          <template v-else-if="column.key === 'includeInClash'">
+            <a-switch 
+              v-model:checked="record.include_in_clash"
+              @change="updateNodeClashStatus(record)"
+            />
+          </template>
+          
+          <template v-else-if="column.key === 'sortOrder'">
+            <a-input-number
+              v-model:value="record.sort_order"
+              :min="0"
+              :style="{ width: '80px' }"
+              @change="updateNodeSortOrder(record)"
+            />
           </template>
           
           <template v-else-if="column.key === 'last_heartbeat'">
@@ -102,6 +129,14 @@
           <a-input-number v-model:value="formState.max_users" :min="1" style="width: 100%" />
         </a-form-item>
 
+        <a-form-item label="包含在Clash">
+          <a-switch v-model:checked="formState.include_in_clash" />
+        </a-form-item>
+
+        <a-form-item label="排序">
+          <a-input-number v-model:value="formState.sort_order" :min="0" style="width: 100%" />
+        </a-form-item>
+
         <a-form-item label="协议配置">
           <a-textarea
             v-model:value="configJson"
@@ -118,13 +153,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { useNodesStore } from '@/stores/nodes'
 import type { Node } from '@/stores/nodes'
 
 const nodesStore = useNodesStore()
+
+const clashFilter = ref<'all' | 'included' | 'excluded'>('all')
+
+const filteredNodes = computed(() => {
+  if (clashFilter.value === 'all') {
+    return nodesStore.nodes
+  } else if (clashFilter.value === 'included') {
+    return nodesStore.nodes.filter(node => node.include_in_clash)
+  } else {
+    return nodesStore.nodes.filter(node => !node.include_in_clash)
+  }
+})
+
+const handleFilterChange = () => {
+  // Filter is reactive through computed property
+}
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
@@ -135,6 +186,8 @@ const columns = [
   { title: '状态', key: 'status', width: 100 },
   { title: '用户数', key: 'users', width: 100 },
   { title: '总流量', key: 'traffic', width: 120 },
+  { title: '包含在Clash', key: 'includeInClash', width: 120 },
+  { title: '排序', key: 'sortOrder', width: 100 },
   { title: '最后心跳', key: 'last_heartbeat', width: 150 },
   { title: '操作', key: 'action', width: 150 }
 ]
@@ -151,7 +204,9 @@ const formState = reactive({
   protocol: 'vless',
   secret: '',
   max_users: 1000,
-  config: {}
+  config: {},
+  include_in_clash: false,
+  sort_order: 0
 })
 
 const getStatusColor = (status: string) => {
@@ -198,6 +253,8 @@ const showCreateModal = () => {
   formState.protocol = 'vless'
   formState.secret = ''
   formState.max_users = 1000
+  formState.include_in_clash = false
+  formState.sort_order = 0
   configJson.value = '{}'
   modalVisible.value = true
 }
@@ -211,6 +268,8 @@ const showEditModal = (node: Node) => {
   formState.protocol = node.protocol
   formState.secret = node.secret
   formState.max_users = node.max_users
+  formState.include_in_clash = node.include_in_clash
+  formState.sort_order = node.sort_order
   configJson.value = JSON.stringify(node.config, null, 2)
   modalVisible.value = true
 }
@@ -244,6 +303,30 @@ const handleDelete = async (id: number) => {
     message.success('节点删除成功')
   } else {
     message.error(nodesStore.error || '删除失败')
+  }
+}
+
+const updateNodeClashStatus = async (node: Node) => {
+  const success = await nodesStore.updateNode(node.id, {
+    include_in_clash: node.include_in_clash
+  })
+  if (success) {
+    message.success('Clash状态更新成功')
+  } else {
+    message.error(nodesStore.error || '更新失败')
+    // Revert the change on failure
+    node.include_in_clash = !node.include_in_clash
+  }
+}
+
+const updateNodeSortOrder = async (node: Node) => {
+  const success = await nodesStore.updateNode(node.id, {
+    sort_order: node.sort_order
+  })
+  if (success) {
+    message.success('排序更新成功')
+  } else {
+    message.error(nodesStore.error || '更新失败')
   }
 }
 

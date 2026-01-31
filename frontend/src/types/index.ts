@@ -55,6 +55,17 @@ export interface Node {
   port: number
   protocol: string
   status: string
+  max_users?: number
+  current_users?: number
+  total_upload?: number
+  total_download?: number
+  last_heartbeat?: string | null
+  created_at?: string
+  updated_at?: string
+  include_in_clash: boolean
+  sort_order: number
+  secret?: string
+  config?: any
 }
 
 // Traffic types

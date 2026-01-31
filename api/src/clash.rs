@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::models::Node;
 
@@ -100,10 +101,11 @@ pub fn generate_clash_config(nodes: &[Node]) -> Result<String> {
     let mut proxy_names = Vec::new();
 
     for node in nodes {
-        let proxy = node_to_clash_proxy(node)?;
-        let name = get_proxy_name(&proxy);
-        proxy_names.push(name);
-        proxies.push(proxy);
+        if let Some(proxy) = node_to_clash_proxy(node) {
+            let name = get_proxy_name(&proxy);
+            proxy_names.push(name);
+            proxies.push(proxy);
+        }
     }
 
     // Create proxy groups
@@ -141,6 +143,21 @@ pub fn generate_clash_config(nodes: &[Node]) -> Result<String> {
         .map_err(|e| anyhow!("Failed to serialize Clash config: {}", e))?;
 
     Ok(yaml)
+}
+
+/// Generate Clash configuration from nodes with include_in_clash=true
+/// This is the new unified approach that reads from the nodes table
+/// and respects the include_in_clash and sort_order fields
+pub async fn generate_clash_config_from_nodes(
+    pool: &sqlx::PgPool,
+) -> Result<String> {
+    use crate::db::list_clash_nodes;
+    
+    // Query nodes with include_in_clash=true ordered by sort_order
+    let nodes = list_clash_nodes(pool).await?;
+    
+    // Use the existing generate_clash_config function
+    generate_clash_config(&nodes)
 }
 
 /// Generate Clash configuration from database models
@@ -380,8 +397,96 @@ fn db_proxy_to_clash_proxy(db_proxy: &crate::models::ClashProxy) -> Result<Clash
     }
 }
 
-/// Convert a Node to a ClashProxy
-fn node_to_clash_proxy(node: &Node) -> Result<ClashProxy> {
+/// Map node protocol to Clash proxy type
+/// Returns None for unsupported protocols and logs a warning
+pub fn map_node_protocol_to_clash(protocol: &str) -> Option<&'static str> {
+    match protocol {
+        "shadowsocks" => Some("ss"),
+        "vmess" => Some("vmess"),
+        "trojan" => Some("trojan"),
+        "hysteria2" => Some("hysteria2"),
+        "vless" => Some("vless"),
+        _ => {
+            warn!("Unsupported protocol: {}", protocol);
+            None
+        }
+    }
+}
+
+/// Merge node.secret and node.config into a complete configuration
+/// Maps secret to password (ss/trojan/hysteria2) or uuid (vmess/vless) based on protocol
+pub fn merge_node_config(node: &Node) -> serde_json::Value {
+    let mut config = node.config.clone();
+    
+    // Add protocol-specific fields from node.secret
+    match node.protocol.as_str() {
+        "shadowsocks" => {
+            // Only set password if not already in config
+            if !config.get("password").is_some() {
+                config["password"] = serde_json::json!(node.secret);
+            }
+        },
+        "vmess" => {
+            // Only set uuid if not already in config
+            if !config.get("uuid").is_some() {
+                config["uuid"] = serde_json::json!(node.secret);
+            }
+        },
+        "trojan" => {
+            // Only set password if not already in config
+            if !config.get("password").is_some() {
+                config["password"] = serde_json::json!(node.secret);
+            }
+        },
+        "hysteria2" => {
+            // Only set password if not already in config
+            if !config.get("password").is_some() {
+                config["password"] = serde_json::json!(node.secret);
+            }
+        },
+        "vless" => {
+            // Only set uuid if not already in config
+            if !config.get("uuid").is_some() {
+                config["uuid"] = serde_json::json!(node.secret);
+            }
+        },
+        _ => {},
+    }
+    
+    config
+}
+
+/// Convert a Node to a ClashProxy using the new unified approach
+/// Maps node fields to Clash proxy format:
+/// - node.name → proxy.name
+/// - node.host → proxy.server
+/// - node.port → proxy.port
+/// - node.protocol → proxy.type (via map_node_protocol_to_clash)
+/// - node.secret + node.config → proxy configuration (via merge_node_config)
+pub fn node_to_clash_proxy(node: &Node) -> Option<ClashProxy> {
+    // Check if protocol is supported
+    map_node_protocol_to_clash(&node.protocol)?;
+    
+    // Merge secret and config
+    let merged_config = merge_node_config(node);
+    
+    // Create a temporary node with merged config for the existing generator functions
+    let mut temp_node = node.clone();
+    temp_node.config = merged_config;
+    
+    // Use existing protocol-specific generators
+    match node.protocol.as_str() {
+        "shadowsocks" => generate_shadowsocks_proxy(&temp_node).ok(),
+        "vmess" => generate_vmess_proxy(&temp_node).ok(),
+        "trojan" => generate_trojan_proxy(&temp_node).ok(),
+        "hysteria2" => generate_hysteria2_proxy(&temp_node).ok(),
+        "vless" => generate_vless_proxy(&temp_node).ok(),
+        _ => None,
+    }
+}
+
+/// Convert a Node to a ClashProxy (legacy version for backward compatibility)
+fn node_to_clash_proxy_legacy(node: &Node) -> Result<ClashProxy> {
     match node.protocol.as_str() {
         "shadowsocks" => generate_shadowsocks_proxy(node),
         "vmess" => generate_vmess_proxy(node),
@@ -391,8 +496,6 @@ fn node_to_clash_proxy(node: &Node) -> Result<ClashProxy> {
         _ => Err(anyhow!("Unsupported protocol: {}", node.protocol)),
     }
 }
-
-/// Get proxy name from ClashProxy
 fn get_proxy_name(proxy: &ClashProxy) -> String {
     match proxy {
         ClashProxy::Shadowsocks { name, .. } => name.clone(),
@@ -629,6 +732,8 @@ mod tests {
             last_heartbeat: Some(Utc::now()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            include_in_clash: true,
+            sort_order: 0,
         }
     }
 

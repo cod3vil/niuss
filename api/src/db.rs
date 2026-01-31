@@ -605,6 +605,22 @@ pub async fn list_nodes_by_status(pool: &PgPool, status: &str) -> Result<Vec<Nod
     Ok(nodes)
 }
 
+/// List nodes that should be included in Clash configuration
+/// Filters by include_in_clash=true and orders by sort_order, then name
+pub async fn list_clash_nodes(pool: &PgPool) -> Result<Vec<Node>> {
+    let nodes = sqlx::query_as::<_, Node>(
+        r#"
+        SELECT * FROM nodes
+        WHERE include_in_clash = true
+        ORDER BY sort_order ASC, name ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(nodes)
+}
+
 /// Update node
 pub async fn update_node(
     pool: &PgPool,
@@ -615,6 +631,8 @@ pub async fn update_node(
     protocol: Option<&str>,
     config: Option<serde_json::Value>,
     status: Option<&str>,
+    include_in_clash: Option<bool>,
+    sort_order: Option<i32>,
 ) -> Result<Node> {
     // Build dynamic update query
     let mut query = String::from("UPDATE nodes SET updated_at = NOW()");
@@ -644,6 +662,14 @@ pub async fn update_node(
         query.push_str(&format!(", status = ${}", bind_count));
         bind_count += 1;
     }
+    if include_in_clash.is_some() {
+        query.push_str(&format!(", include_in_clash = ${}", bind_count));
+        bind_count += 1;
+    }
+    if sort_order.is_some() {
+        query.push_str(&format!(", sort_order = ${}", bind_count));
+        bind_count += 1;
+    }
 
     query.push_str(&format!(" WHERE id = ${} RETURNING *", bind_count));
 
@@ -666,6 +692,12 @@ pub async fn update_node(
     }
     if let Some(s) = status {
         q = q.bind(s);
+    }
+    if let Some(ic) = include_in_clash {
+        q = q.bind(ic);
+    }
+    if let Some(so) = sort_order {
+        q = q.bind(so);
     }
 
     q = q.bind(node_id);
@@ -1529,4 +1561,153 @@ pub async fn delete_clash_rule(pool: &PgPool, rule_id: i64) -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+// ============================================================================
+// Clash Access Logs
+// ============================================================================
+
+/// Create a new access log entry
+pub async fn create_access_log(
+    pool: &PgPool,
+    user_id: i64,
+    subscription_token: &str,
+    ip_address: &str,
+    user_agent: Option<&str>,
+    response_status: &str,
+) -> Result<crate::models::ClashAccessLog> {
+    let log = sqlx::query_as::<_, crate::models::ClashAccessLog>(
+        r#"
+        INSERT INTO clash_access_logs 
+        (user_id, subscription_token, access_timestamp, ip_address, user_agent, response_status)
+        VALUES ($1, $2, NOW(), $3, $4, $5)
+        RETURNING *
+        "#,
+    )
+    .bind(user_id)
+    .bind(subscription_token)
+    .bind(ip_address)
+    .bind(user_agent)
+    .bind(response_status)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(log)
+}
+
+/// Query access logs with filters and pagination
+pub async fn query_access_logs(
+    pool: &PgPool,
+    user_id: Option<i64>,
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
+    status: Option<&str>,
+    page: i64,
+    page_size: i64,
+) -> Result<(Vec<crate::models::AccessLogResponse>, i64)> {
+    let offset = (page - 1) * page_size;
+    
+    // Build dynamic query based on filters
+    let mut query = String::from(
+        r#"
+        SELECT 
+            cal.id,
+            cal.user_id,
+            u.email as user_email,
+            cal.subscription_token,
+            cal.access_timestamp,
+            cal.ip_address,
+            cal.user_agent,
+            cal.response_status
+        FROM clash_access_logs cal
+        INNER JOIN users u ON cal.user_id = u.id
+        WHERE 1=1
+        "#
+    );
+    
+    let mut count_query = String::from(
+        r#"
+        SELECT COUNT(*) as count
+        FROM clash_access_logs cal
+        WHERE 1=1
+        "#
+    );
+    
+    let mut bind_params: Vec<String> = Vec::new();
+    let mut param_count = 1;
+    
+    // Add filters dynamically
+    if user_id.is_some() {
+        query.push_str(&format!(" AND cal.user_id = ${}", param_count));
+        count_query.push_str(&format!(" AND cal.user_id = ${}", param_count));
+        bind_params.push("user_id".to_string());
+        param_count += 1;
+    }
+    
+    if start_date.is_some() {
+        query.push_str(&format!(" AND cal.access_timestamp >= ${}", param_count));
+        count_query.push_str(&format!(" AND cal.access_timestamp >= ${}", param_count));
+        bind_params.push("start_date".to_string());
+        param_count += 1;
+    }
+    
+    if end_date.is_some() {
+        query.push_str(&format!(" AND cal.access_timestamp <= ${}", param_count));
+        count_query.push_str(&format!(" AND cal.access_timestamp <= ${}", param_count));
+        bind_params.push("end_date".to_string());
+        param_count += 1;
+    }
+    
+    if status.is_some() {
+        query.push_str(&format!(" AND cal.response_status = ${}", param_count));
+        count_query.push_str(&format!(" AND cal.response_status = ${}", param_count));
+        bind_params.push("status".to_string());
+        param_count += 1;
+    }
+    
+    query.push_str(&format!(" ORDER BY cal.access_timestamp DESC LIMIT ${} OFFSET ${}", param_count, param_count + 1));
+    
+    // Build queries with proper parameter binding
+    let mut logs_query = sqlx::query_as::<_, crate::models::AccessLogResponse>(&query);
+    let mut count_query_exec = sqlx::query_scalar::<_, i64>(&count_query);
+    
+    // Bind parameters in order
+    for param in &bind_params {
+        match param.as_str() {
+            "user_id" => {
+                if let Some(uid) = user_id {
+                    logs_query = logs_query.bind(uid);
+                    count_query_exec = count_query_exec.bind(uid);
+                }
+            }
+            "start_date" => {
+                if let Some(sd) = start_date {
+                    logs_query = logs_query.bind(sd);
+                    count_query_exec = count_query_exec.bind(sd);
+                }
+            }
+            "end_date" => {
+                if let Some(ed) = end_date {
+                    logs_query = logs_query.bind(ed);
+                    count_query_exec = count_query_exec.bind(ed);
+                }
+            }
+            "status" => {
+                if let Some(s) = status {
+                    logs_query = logs_query.bind(s);
+                    count_query_exec = count_query_exec.bind(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    // Bind pagination parameters
+    logs_query = logs_query.bind(page_size).bind(offset);
+    
+    // Execute queries
+    let logs = logs_query.fetch_all(pool).await?;
+    let total = count_query_exec.fetch_one(pool).await?;
+    
+    Ok((logs, total))
 }

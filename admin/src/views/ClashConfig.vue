@@ -2,35 +2,16 @@
   <div class="clash-config">
     <h1>Clash 配置管理</h1>
     
+    <a-alert
+      message="代理管理已迁移"
+      description="代理管理功能已迁移至节点管理页面。请在节点页面使用"包含在 Clash 中"开关来控制哪些节点出现在 Clash 配置中。"
+      type="info"
+      show-icon
+      closable
+      style="margin-bottom: 16px"
+    />
+    
     <a-tabs v-model:activeKey="activeTab" type="card">
-      <!-- 代理管理 -->
-      <a-tab-pane key="proxies" tab="代理管理">
-        <div class="tab-header">
-          <a-space>
-            <a-button type="primary" @click="showProxyDialog('create')">添加代理</a-button>
-            <a-button @click="loadProxies">刷新</a-button>
-          </a-space>
-        </div>
-        
-        <a-table :dataSource="proxies" :columns="proxyColumns" :loading="loading" rowKey="id">
-          <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'is_active'">
-              <a-tag :color="record.is_active ? 'green' : 'default'">
-                {{ record.is_active ? '启用' : '禁用' }}
-              </a-tag>
-            </template>
-            <template v-else-if="column.key === 'action'">
-              <a-space>
-                <a-button size="small" @click="showProxyDialog('edit', record)">编辑</a-button>
-                <a-popconfirm title="确定删除?" @confirm="deleteProxy(record.id)">
-                  <a-button size="small" danger>删除</a-button>
-                </a-popconfirm>
-              </a-space>
-            </template>
-          </template>
-        </a-table>
-      </a-tab-pane>
-
       <!-- 代理组管理 -->
       <a-tab-pane key="groups" tab="代理组管理">
         <div class="tab-header">
@@ -109,39 +90,6 @@
       </a-tab-pane>
     </a-tabs>
 
-    <!-- 代理对话框 -->
-    <a-modal v-model:open="proxyDialogVisible" :title="dialogTitle" width="600px" @ok="saveProxy">
-      <a-form :model="proxyForm" :label-col="{ span: 6 }">
-        <a-form-item label="名称">
-          <a-input v-model:value="proxyForm.name" />
-        </a-form-item>
-        <a-form-item label="类型">
-          <a-select v-model:value="proxyForm.type">
-            <a-select-option value="ss">Shadowsocks</a-select-option>
-            <a-select-option value="vmess">VMess</a-select-option>
-            <a-select-option value="trojan">Trojan</a-select-option>
-            <a-select-option value="hysteria2">Hysteria2</a-select-option>
-            <a-select-option value="vless">VLESS</a-select-option>
-          </a-select>
-        </a-form-item>
-        <a-form-item label="服务器">
-          <a-input v-model:value="proxyForm.server" />
-        </a-form-item>
-        <a-form-item label="端口">
-          <a-input-number v-model:value="proxyForm.port" :min="1" :max="65535" style="width: 100%" />
-        </a-form-item>
-        <a-form-item label="配置">
-          <a-textarea v-model:value="proxyForm.configJson" :rows="6" placeholder='{"password": "xxx"}' />
-        </a-form-item>
-        <a-form-item label="启用">
-          <a-switch v-model:checked="proxyForm.is_active" />
-        </a-form-item>
-        <a-form-item label="排序">
-          <a-input-number v-model:value="proxyForm.sort_order" :min="0" style="width: 100%" />
-        </a-form-item>
-      </a-form>
-    </a-modal>
-
     <!-- 代理组对话框 -->
     <a-modal v-model:open="groupDialogVisible" :title="dialogTitle" width="600px" @ok="saveGroup">
       <a-form :model="groupForm" :label-col="{ span: 6 }">
@@ -208,20 +156,10 @@ import { ref, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import api from '@/api'
 
-const activeTab = ref('proxies')
+const activeTab = ref('groups')
 const loading = ref(false)
 
 // 表格列定义
-const proxyColumns = [
-  { title: '名称', dataIndex: 'name', key: 'name', width: 150 },
-  { title: '类型', dataIndex: 'type', key: 'type', width: 100 },
-  { title: '服务器', dataIndex: 'server', key: 'server', width: 200 },
-  { title: '端口', dataIndex: 'port', key: 'port', width: 80 },
-  { title: '状态', key: 'is_active', width: 80 },
-  { title: '排序', dataIndex: 'sort_order', key: 'sort_order', width: 80 },
-  { title: '操作', key: 'action', width: 200 }
-]
-
 const groupColumns = [
   { title: '名称', dataIndex: 'name', key: 'name', width: 150 },
   { title: '类型', dataIndex: 'type', key: 'type', width: 120 },
@@ -241,30 +179,17 @@ const ruleColumns = [
 ]
 
 // 数据
-const proxies = ref([])
 const groups = ref([])
 const rules = ref([])
 const generatedConfig = ref('')
 
 // 对话框
-const proxyDialogVisible = ref(false)
 const groupDialogVisible = ref(false)
 const ruleDialogVisible = ref(false)
 const dialogTitle = ref('')
 const dialogMode = ref<'create' | 'edit'>('create')
 
 // 表单
-const proxyForm = ref({
-  id: null,
-  name: '',
-  type: 'trojan',
-  server: '',
-  port: 443,
-  configJson: '{}',
-  is_active: true,
-  sort_order: 0
-})
-
 const groupForm = ref({
   id: null,
   name: '',
@@ -285,18 +210,6 @@ const ruleForm = ref({
 })
 
 // 加载数据
-const loadProxies = async () => {
-  loading.value = true
-  try {
-    const res = await api.get('/admin/clash/proxies')
-    proxies.value = res.data
-  } catch (error: any) {
-    message.error(error.response?.data?.error?.message || '加载失败')
-  } finally {
-    loading.value = false
-  }
-}
-
 const loadGroups = async () => {
   loading.value = true
   try {
@@ -318,76 +231,6 @@ const loadRules = async () => {
     message.error(error.response?.data?.error?.message || '加载失败')
   } finally {
     loading.value = false
-  }
-}
-
-// 代理操作
-const showProxyDialog = (mode: 'create' | 'edit', row?: any) => {
-  dialogMode.value = mode
-  dialogTitle.value = mode === 'create' ? '添加代理' : '编辑代理'
-  
-  if (mode === 'edit' && row) {
-    proxyForm.value = {
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      server: row.server,
-      port: row.port,
-      configJson: JSON.stringify(row.config, null, 2),
-      is_active: row.is_active,
-      sort_order: row.sort_order
-    }
-  } else {
-    proxyForm.value = {
-      id: null,
-      name: '',
-      type: 'trojan',
-      server: '',
-      port: 443,
-      configJson: '{"password": "", "udp": true, "skip-cert-verify": true}',
-      is_active: true,
-      sort_order: 0
-    }
-  }
-  
-  proxyDialogVisible.value = true
-}
-
-const saveProxy = async () => {
-  try {
-    const config = JSON.parse(proxyForm.value.configJson)
-    const data = {
-      name: proxyForm.value.name,
-      type: proxyForm.value.type,
-      server: proxyForm.value.server,
-      port: proxyForm.value.port,
-      config,
-      is_active: proxyForm.value.is_active,
-      sort_order: proxyForm.value.sort_order
-    }
-    
-    if (dialogMode.value === 'create') {
-      await api.post('/admin/clash/proxies', data)
-      message.success('添加成功')
-    } else {
-      await api.put(`/admin/clash/proxies/${proxyForm.value.id}`, data)
-      message.success('更新成功')
-    }
-    
-    proxyDialogVisible.value = false
-    loadProxies()
-  } catch (error: any) {
-    message.error(error.response?.data?.error?.message || '保存失败')
-  }
-}
-
-const deleteProxy = async (id: number) => {
-  try {
-    await api.delete(`/admin/clash/proxies/${id}`)
-    message.success('删除成功')
-    loadProxies()
-  } catch (error: any) {
-    message.error(error.response?.data?.error?.message || '删除失败')
   }
 }
 
@@ -528,7 +371,6 @@ const generateConfig = async () => {
 }
 
 onMounted(() => {
-  loadProxies()
   loadGroups()
   loadRules()
 })

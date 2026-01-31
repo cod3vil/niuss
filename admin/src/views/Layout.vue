@@ -35,6 +35,10 @@
           <ApiOutlined />
           <span>Clash 配置</span>
         </a-menu-item>
+        <a-menu-item key="access-logs">
+          <FileTextOutlined />
+          <span>访问日志</span>
+        </a-menu-item>
       </a-menu>
     </a-layout-sider>
     
@@ -83,6 +87,7 @@ import {
   ShoppingOutlined,
   BarChartOutlined,
   ApiOutlined,
+  FileTextOutlined,
   DownOutlined,
   LogoutOutlined
 } from '@ant-design/icons-vue'

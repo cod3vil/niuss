@@ -455,6 +455,8 @@ mod tests {
                 last_heartbeat: Some(chrono::Utc::now()),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                include_in_clash: false,
+                sort_order: 0,
             },
         ];
 
@@ -508,6 +510,8 @@ mod tests {
                 last_heartbeat: Some(chrono::Utc::now()),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                include_in_clash: false,
+                sort_order: 0,
             },
         ];
 

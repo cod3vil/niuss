@@ -76,6 +76,80 @@ impl From<anyhow::Error> for ApiError {
     }
 }
 
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/// Extract client IP address from request headers
+/// 
+/// Checks X-Forwarded-For header first (for proxied requests), then falls back to X-Real-IP.
+/// Returns None if no IP address can be extracted.
+fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
+    // Check X-Forwarded-For header first (for proxied requests)
+    if let Some(forwarded) = headers.get("x-forwarded-for") {
+        if let Ok(forwarded_str) = forwarded.to_str() {
+            // Take the first IP in the comma-separated chain
+            if let Some(first_ip) = forwarded_str.split(',').next() {
+                let trimmed = first_ip.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    
+    // Check X-Real-IP header as fallback
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(ip_str) = real_ip.to_str() {
+            let trimmed = ip_str.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    
+    None
+}
+
+/// Async helper to log access without blocking the response
+/// 
+/// This function spawns an async task to log subscription access attempts to the database.
+/// It is designed to be non-blocking and resilient - logging failures will not affect
+/// the main request flow.
+async fn log_access_async(
+    state: &AppState,
+    user_id: i64,
+    token: &str,
+    ip_address: &str,
+    user_agent: Option<&str>,
+    status: &str,
+) {
+    // Clone necessary data for async task
+    let pool = state.db_pool.clone();
+    let token = token.to_string();
+    let ip = ip_address.to_string();
+    let ua = user_agent.map(|s| s.to_string());
+    let status = status.to_string();
+    
+    // Spawn async task to avoid blocking
+    tokio::spawn(async move {
+        if let Err(e) = db::create_access_log(
+            &pool,
+            user_id,
+            &token,
+            &ip,
+            ua.as_deref(),
+            &status,
+        ).await {
+            tracing::error!("Failed to log access: {:?}", e);
+        }
+    });
+}
+
+// ============================================================================
+// Router Configuration
+// ============================================================================
+
 pub fn create_router(
     db_pool: PgPool,
     redis_conn: ConnectionManager,
@@ -158,10 +232,8 @@ pub fn create_router(
         .route("/api/admin/stats/revenue", get(admin_stats_revenue_handler))
         .route("/api/admin/stats/traffic", get(admin_stats_traffic_handler))
         // Admin Clash configuration endpoints
-        .route("/api/admin/clash/proxies", get(admin_list_clash_proxies_handler))
-        .route("/api/admin/clash/proxies", post(admin_create_clash_proxy_handler))
-        .route("/api/admin/clash/proxies/:id", put(admin_update_clash_proxy_handler))
-        .route("/api/admin/clash/proxies/:id", delete(admin_delete_clash_proxy_handler))
+        // Note: Clash proxy management endpoints have been removed as part of node-proxy unification
+        // Proxies are now managed through the /api/admin/nodes endpoints
         .route("/api/admin/clash/proxy-groups", get(admin_list_clash_proxy_groups_handler))
         .route("/api/admin/clash/proxy-groups", post(admin_create_clash_proxy_group_handler))
         .route("/api/admin/clash/proxy-groups/:id", put(admin_update_clash_proxy_group_handler))
@@ -171,6 +243,8 @@ pub fn create_router(
         .route("/api/admin/clash/rules/:id", put(admin_update_clash_rule_handler))
         .route("/api/admin/clash/rules/:id", delete(admin_delete_clash_rule_handler))
         .route("/api/admin/clash/generate", get(admin_generate_clash_config_handler))
+        // Admin access logs endpoints
+        .route("/api/admin/access-logs", get(admin_query_access_logs_handler))
         .layer(cors)
         .with_state(state)
 }
@@ -1095,10 +1169,27 @@ async fn get_subscription_link_handler(
 async fn get_subscription_config_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Extract IP address from headers
+    let ip_address = extract_client_ip(&headers)
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    // Extract User-Agent from headers
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    
     // Try to get from cache first
     if let Ok(Some(cached_config)) = state.redis_cache.get_subscription_config(&token).await {
         tracing::debug!("Subscription config cache hit for token {}", token);
+        
+        // We need to get user_id for logging even with cache hit
+        if let Ok(Some(subscription)) = db::get_subscription_by_token(&state.db_pool, &token).await {
+            log_access_async(&state, subscription.user_id, &token, &ip_address, user_agent.as_deref(), "success").await;
+        }
+        
         return Ok((
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
@@ -1109,17 +1200,35 @@ async fn get_subscription_config_handler(
     tracing::debug!("Subscription config cache miss for token {}", token);
 
     // Get subscription from database
-    let subscription = db::get_subscription_by_token(&state.db_pool, &token)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Subscription not found".to_string()))?;
+    let subscription = match db::get_subscription_by_token(&state.db_pool, &token).await {
+        Ok(Some(sub)) => sub,
+        Ok(None) => {
+            // Log failed access attempt (subscription not found)
+            // We don't have user_id, so we can't log this properly
+            // This is a limitation - we'll skip logging for invalid tokens
+            return Err(ApiError::NotFound("Subscription not found".to_string()));
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let user_id = subscription.user_id;
 
     // Get user
-    let user = db::get_user_by_id(&state.db_pool, subscription.user_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+    let user = match db::get_user_by_id(&state.db_pool, user_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "failed").await;
+            return Err(ApiError::NotFound("User not found".to_string()));
+        }
+        Err(e) => {
+            log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "failed").await;
+            return Err(e.into());
+        }
+    };
 
     // Check if user is active
     if user.status == "disabled" {
+        log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "disabled").await;
         return Err(ApiError::Unauthorized("Account is disabled".to_string()));
     }
 
@@ -1130,6 +1239,7 @@ async fn get_subscription_config_handler(
 
     if !has_traffic {
         tracing::warn!("User {} has exceeded traffic quota", user.id);
+        log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "quota_exceeded").await;
         let empty_config = "proxies: []\nproxy-groups: []\nrules: []\n";
         return Ok((
             StatusCode::OK,
@@ -1153,6 +1263,7 @@ async fn get_subscription_config_handler(
 
     // If no valid package, return empty config
     if user_packages.is_none() {
+        log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "expired").await;
         let empty_config = "proxies: []\nproxy-groups: []\nrules: []\n";
         return Ok((
             StatusCode::OK,
@@ -1166,6 +1277,7 @@ async fn get_subscription_config_handler(
     // Check if package traffic is exhausted
     if user_package.traffic_used >= user_package.traffic_quota {
         tracing::warn!("User {} package traffic exhausted", user.id);
+        log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "quota_exceeded").await;
         let empty_config = "proxies: []\nproxy-groups: []\nrules: []\n";
         return Ok((
             StatusCode::OK,
@@ -1219,6 +1331,9 @@ async fn get_subscription_config_handler(
     .bind(&token)
     .execute(&state.db_pool)
     .await;
+
+    // Log successful access
+    log_access_async(&state, user_id, &token, &ip_address, user_agent.as_deref(), "success").await;
 
     Ok((
         StatusCode::OK,
@@ -1387,6 +1502,13 @@ async fn admin_update_node_handler(
         }
     }
 
+    // Validate sort_order if provided (must be non-negative)
+    if let Some(sort_order) = payload.sort_order {
+        if sort_order < 0 {
+            return Err(ApiError::BadRequest("sort_order must be a non-negative integer".to_string()));
+        }
+    }
+
     // Update node in database
     let updated_node = db::update_node(
         &state.db_pool,
@@ -1397,6 +1519,8 @@ async fn admin_update_node_handler(
         payload.protocol.as_deref(),
         payload.config,
         payload.status.as_deref(),
+        payload.include_in_clash,
+        payload.sort_order,
     )
     .await?;
 
@@ -1414,6 +1538,8 @@ async fn admin_update_node_handler(
             "port": payload.port,
             "protocol": payload.protocol.clone(),
             "status": payload.status.clone(),
+            "include_in_clash": payload.include_in_clash,
+            "sort_order": payload.sort_order,
         })),
     )
     .await;
@@ -1617,6 +1743,219 @@ mod tests {
 
     // Integration tests would go here, but they require a running database
     // These would test the actual register, login, and refresh handlers
+
+    #[test]
+    fn test_extract_client_ip_x_forwarded_for_single() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "192.168.1.100".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        assert_eq!(result, Some("192.168.1.100".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_x_forwarded_for_multiple() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.45, 198.51.100.178, 192.0.2.1".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        // Should return the first IP in the chain
+        assert_eq!(result, Some("203.0.113.45".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_x_forwarded_for_with_spaces() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "  10.0.0.1  , 10.0.0.2".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        // Should trim whitespace
+        assert_eq!(result, Some("10.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_x_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "172.16.0.50".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        assert_eq!(result, Some("172.16.0.50".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_x_forwarded_for_priority() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.45".parse().unwrap());
+        headers.insert("x-real-ip", "172.16.0.50".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        // X-Forwarded-For should take priority
+        assert_eq!(result, Some("203.0.113.45".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_ipv6() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "2001:0db8:85a3:0000:0000:8a2e:0370:7334".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        assert_eq!(result, Some("2001:0db8:85a3:0000:0000:8a2e:0370:7334".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_ipv6_compressed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "2001:db8::1".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        assert_eq!(result, Some("2001:db8::1".to_string()));
+    }
+
+    #[test]
+    fn test_extract_client_ip_missing_headers() {
+        let headers = HeaderMap::new();
+        
+        let result = extract_client_ip(&headers);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_client_ip_empty_x_forwarded_for() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        // Should return None for empty header
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_client_ip_fallback_to_x_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "".parse().unwrap());
+        headers.insert("x-real-ip", "192.168.1.1".parse().unwrap());
+        
+        let result = extract_client_ip(&headers);
+        // Should fall back to X-Real-IP when X-Forwarded-For is empty
+        assert_eq!(result, Some("192.168.1.1".to_string()));
+    }
+
+    /// Test that log_access_async returns immediately without blocking
+    /// 
+    /// This test verifies that the logging function is non-blocking and returns
+    /// quickly even though the actual database write happens asynchronously.
+    #[tokio::test]
+    async fn test_log_access_async_non_blocking() {
+        // Create a mock state with a database pool
+        // Note: This test doesn't actually connect to a database, it just verifies
+        // that the function returns immediately
+        
+        let start = std::time::Instant::now();
+        
+        // Create a minimal AppState for testing
+        // We'll use a connection string that won't actually connect
+        let pool = sqlx::PgPool::connect_lazy("postgresql://test:test@localhost/test")
+            .expect("Failed to create pool");
+        
+        let redis_conn = redis::Client::open("redis://127.0.0.1/")
+            .expect("Failed to create redis client")
+            .get_connection_manager()
+            .await
+            .expect("Failed to get connection manager");
+        
+        let redis_cache = RedisCache::new(redis_conn);
+        
+        let config = Config {
+            database_url: "postgresql://test:test@localhost/test".to_string(),
+            redis_url: "redis://127.0.0.1/".to_string(),
+            jwt_secret: "test_secret".to_string(),
+            jwt_expiration: 3600,
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            cors_origins: vec!["*".to_string()],
+        };
+        
+        let state = AppState {
+            db_pool: pool,
+            redis_cache,
+            config: Arc::new(config),
+        };
+        
+        // Call log_access_async
+        log_access_async(
+            &state,
+            1,
+            "test_token",
+            "127.0.0.1",
+            Some("test-agent"),
+            "success",
+        ).await;
+        
+        let elapsed = start.elapsed();
+        
+        // Verify that the function returned quickly (within 100ms)
+        // The actual database write happens in the background
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "log_access_async should return immediately, took {:?}",
+            elapsed
+        );
+        
+        // Give the spawned task a moment to attempt the database write
+        // (it will fail since we're not connected to a real database, but that's okay)
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// Test that logging failures don't crash the handler
+    /// 
+    /// This test verifies that even if the database write fails, the function
+    /// completes successfully without panicking.
+    #[tokio::test]
+    async fn test_log_access_async_resilience() {
+        // Create a state with an invalid database connection
+        let pool = sqlx::PgPool::connect_lazy("postgresql://invalid:invalid@localhost:9999/invalid")
+            .expect("Failed to create pool");
+        
+        let redis_conn = redis::Client::open("redis://127.0.0.1/")
+            .expect("Failed to create redis client")
+            .get_connection_manager()
+            .await
+            .expect("Failed to get connection manager");
+        
+        let redis_cache = RedisCache::new(redis_conn);
+        
+        let config = Config {
+            database_url: "postgresql://invalid:invalid@localhost:9999/invalid".to_string(),
+            redis_url: "redis://127.0.0.1/".to_string(),
+            jwt_secret: "test_secret".to_string(),
+            jwt_expiration: 3600,
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            cors_origins: vec!["*".to_string()],
+        };
+        
+        let state = AppState {
+            db_pool: pool,
+            redis_cache,
+            config: Arc::new(config),
+        };
+        
+        // This should not panic even though the database connection is invalid
+        log_access_async(
+            &state,
+            1,
+            "test_token",
+            "192.168.1.1",
+            Some("Mozilla/5.0"),
+            "failed",
+        ).await;
+        
+        // Give the spawned task time to fail
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        
+        // If we reach here without panicking, the test passes
+        // The error will be logged but won't crash the application
+    }
 }
 
 // ============================================================================
@@ -2352,215 +2691,9 @@ async fn admin_stats_traffic_handler(
 // Clash Configuration Management Handlers
 // ============================================================================
 
-/// GET /api/admin/clash/proxies - Get all Clash proxies (admin only)
-async fn admin_list_clash_proxies_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<Vec<crate::models::ClashProxy>>, ApiError> {
-    // Extract and verify JWT token
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
-
-    let claims = verify_token(token, &state.config.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
-
-    // Check if user is admin
-    if !claims.is_admin {
-        return Err(ApiError::Unauthorized("Admin access required".to_string()));
-    }
-
-    // Parse active_only parameter
-    let active_only = params
-        .get("active_only")
-        .and_then(|s| s.parse::<bool>().ok())
-        .unwrap_or(false);
-
-    // Get proxies from database
-    let proxies = db::list_clash_proxies(&state.db_pool, active_only).await?;
-
-    Ok(Json(proxies))
-}
-
-/// POST /api/admin/clash/proxies - Create a new Clash proxy (admin only)
-async fn admin_create_clash_proxy_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<crate::models::ClashProxyRequest>,
-) -> Result<Json<crate::models::ClashProxy>, ApiError> {
-    // Extract and verify JWT token
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
-
-    let claims = verify_token(token, &state.config.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
-
-    // Check if user is admin
-    if !claims.is_admin {
-        return Err(ApiError::Unauthorized("Admin access required".to_string()));
-    }
-
-    // Validate port range
-    if payload.port < 1 || payload.port > 65535 {
-        return Err(ApiError::BadRequest("Port must be between 1 and 65535".to_string()));
-    }
-
-    // Validate proxy type
-    let valid_types = ["ss", "vmess", "trojan", "hysteria2", "vless"];
-    if !valid_types.contains(&payload.proxy_type.as_str()) {
-        return Err(ApiError::BadRequest(format!(
-            "Invalid proxy type. Must be one of: {}",
-            valid_types.join(", ")
-        )));
-    }
-
-    // Create proxy in database
-    let proxy = db::create_clash_proxy(
-        &state.db_pool,
-        &payload.name,
-        &payload.proxy_type,
-        &payload.server,
-        payload.port,
-        &payload.config,
-        payload.is_active.unwrap_or(true),
-        payload.sort_order.unwrap_or(0),
-    )
-    .await?;
-
-    // Log admin action
-    let _ = db::create_admin_log(
-        &state.db_pool,
-        claims.sub,
-        "create_clash_proxy",
-        Some("clash_proxy"),
-        Some(proxy.id),
-        Some(json!({
-            "proxy_name": &payload.name,
-            "proxy_type": &payload.proxy_type,
-        })),
-    )
-    .await;
-
-    Ok(Json(proxy))
-}
-
-/// PUT /api/admin/clash/proxies/:id - Update a Clash proxy (admin only)
-async fn admin_update_clash_proxy_handler(
-    State(state): State<AppState>,
-    Path(proxy_id): Path<i64>,
-    headers: HeaderMap,
-    Json(payload): Json<crate::models::ClashProxyRequest>,
-) -> Result<Json<crate::models::ClashProxy>, ApiError> {
-    // Extract and verify JWT token
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
-
-    let claims = verify_token(token, &state.config.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
-
-    // Check if user is admin
-    if !claims.is_admin {
-        return Err(ApiError::Unauthorized("Admin access required".to_string()));
-    }
-
-    // Check if proxy exists
-    let _existing_proxy = db::get_clash_proxy_by_id(&state.db_pool, proxy_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Proxy not found".to_string()))?;
-
-    // Validate port range
-    if payload.port < 1 || payload.port > 65535 {
-        return Err(ApiError::BadRequest("Port must be between 1 and 65535".to_string()));
-    }
-
-    // Update proxy in database
-    let updated_proxy = db::update_clash_proxy(
-        &state.db_pool,
-        proxy_id,
-        Some(&payload.name),
-        Some(&payload.proxy_type),
-        Some(&payload.server),
-        Some(payload.port),
-        Some(&payload.config),
-        payload.is_active,
-        payload.sort_order,
-    )
-    .await?;
-
-    // Log admin action
-    let _ = db::create_admin_log(
-        &state.db_pool,
-        claims.sub,
-        "update_clash_proxy",
-        Some("clash_proxy"),
-        Some(proxy_id),
-        Some(json!({
-            "proxy_id": proxy_id,
-            "proxy_name": &payload.name,
-        })),
-    )
-    .await;
-
-    Ok(Json(updated_proxy))
-}
-
-/// DELETE /api/admin/clash/proxies/:id - Delete a Clash proxy (admin only)
-async fn admin_delete_clash_proxy_handler(
-    State(state): State<AppState>,
-    Path(proxy_id): Path<i64>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    // Extract and verify JWT token
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid authorization header".to_string()))?;
-
-    let claims = verify_token(token, &state.config.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".to_string()))?;
-
-    // Check if user is admin
-    if !claims.is_admin {
-        return Err(ApiError::Unauthorized("Admin access required".to_string()));
-    }
-
-    // Check if proxy exists
-    let proxy = db::get_clash_proxy_by_id(&state.db_pool, proxy_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Proxy not found".to_string()))?;
-
-    // Delete proxy from database
-    db::delete_clash_proxy(&state.db_pool, proxy_id).await?;
-
-    // Log admin action
-    let _ = db::create_admin_log(
-        &state.db_pool,
-        claims.sub,
-        "delete_clash_proxy",
-        Some("clash_proxy"),
-        Some(proxy_id),
-        Some(json!({
-            "proxy_id": proxy_id,
-            "proxy_name": proxy.name,
-        })),
-    )
-    .await;
-
-    Ok(Json(json!({
-        "message": "Clash proxy deleted successfully",
-        "proxy_id": proxy_id,
-    })))
-}
+// Note: Clash proxy management handlers have been removed as part of node-proxy unification.
+// Proxies are now managed through the node management endpoints (/api/admin/nodes).
+// The following handlers remain for proxy groups and rules management:
 
 /// GET /api/admin/clash/proxy-groups - Get all Clash proxy groups (admin only)
 async fn admin_list_clash_proxy_groups_handler(
@@ -2989,13 +3122,8 @@ async fn admin_generate_clash_config_handler(
         return Err(ApiError::Unauthorized("Admin access required".to_string()));
     }
 
-    // Get active proxies, proxy groups, and rules from database
-    let proxies = db::list_clash_proxies(&state.db_pool, true).await?;
-    let proxy_groups = db::list_clash_proxy_groups(&state.db_pool, true).await?;
-    let rules = db::list_clash_rules(&state.db_pool, true).await?;
-
-    // Generate Clash configuration
-    let clash_config = crate::clash::generate_clash_config_from_db(&proxies, &proxy_groups, &rules)
+    // Generate Clash configuration from nodes
+    let clash_config = crate::clash::generate_clash_config_from_nodes(&state.db_pool).await
         .map_err(|e| ApiError::InternalServerError(format!("Failed to generate config: {}", e)))?;
 
     Ok((
@@ -3003,4 +3131,62 @@ async fn admin_generate_clash_config_handler(
         [(axum::http::header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
         clash_config,
     ))
+}
+
+// ============================================================================
+// Access Logs Management (Admin)
+// ============================================================================
+
+/// GET /api/admin/access-logs - Query access logs (admin only)
+async fn admin_query_access_logs_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<crate::models::AccessLogQueryRequest>,
+) -> Result<Json<crate::models::AccessLogListResponse>, ApiError> {
+    // Extract and verify JWT token from Authorization header
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::Unauthorized("Missing authorization header".to_string()))?;
+
+    let claims = verify_token(token, &state.config.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized("Invalid token".to_string()))?;
+
+    // Verify user is admin using get_user_by_id
+    let user = db::get_user_by_id(&state.db_pool, claims.sub)
+        .await?
+        .ok_or_else(|| ApiError::Unauthorized("User not found".to_string()))?;
+
+    if !user.is_admin {
+        return Err(ApiError::Unauthorized("Admin access required".to_string()));
+    }
+
+    // Set default pagination values (page=1, page_size=50)
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(50).clamp(1, 100);
+
+    // Call db::query_access_logs with filters
+    let (logs, total) = db::query_access_logs(
+        &state.db_pool,
+        params.user_id,
+        params.start_date,
+        params.end_date,
+        params.status.as_deref(),
+        page,
+        page_size,
+    )
+    .await?;
+
+    // Calculate total_pages from total count
+    let total_pages = (total + page_size - 1) / page_size;
+
+    // Return Json<AccessLogListResponse>
+    Ok(Json(crate::models::AccessLogListResponse {
+        logs,
+        total,
+        page,
+        page_size,
+        total_pages,
+    }))
 }

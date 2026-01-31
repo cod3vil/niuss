@@ -80,6 +80,9 @@ pub struct Node {
     pub last_heartbeat: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    // New fields for Clash integration
+    pub include_in_clash: bool,
+    pub sort_order: i32,
 }
 
 /// TrafficLog model representing traffic usage records
@@ -207,6 +210,9 @@ pub struct UpdateNodeRequest {
     pub protocol: Option<String>,
     pub config: Option<serde_json::Value>,
     pub status: Option<String>,
+    // New fields for Clash integration
+    pub include_in_clash: Option<bool>,
+    pub sort_order: Option<i32>,
 }
 
 /// Request body for node heartbeat
@@ -332,6 +338,57 @@ pub struct ClashRuleRequest {
     pub description: Option<String>,
 }
 
+// ============================================================================
+// Clash Access Logs Models
+// ============================================================================
+
+/// ClashAccessLog model representing a subscription access attempt
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ClashAccessLog {
+    pub id: i64,
+    pub user_id: i64,
+    pub subscription_token: String,
+    pub access_timestamp: DateTime<Utc>,
+    pub ip_address: String,
+    pub user_agent: Option<String>,
+    pub response_status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Request body for querying access logs (admin)
+#[derive(Debug, Deserialize)]
+pub struct AccessLogQueryRequest {
+    pub user_id: Option<i64>,
+    pub start_date: Option<DateTime<Utc>>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub status: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+}
+
+/// Response for access log query with user information
+#[derive(Debug, Serialize, FromRow)]
+pub struct AccessLogResponse {
+    pub id: i64,
+    pub user_id: i64,
+    pub user_email: String,
+    pub subscription_token: String,
+    pub access_timestamp: DateTime<Utc>,
+    pub ip_address: String,
+    pub user_agent: Option<String>,
+    pub response_status: String,
+}
+
+/// Paginated response for access logs
+#[derive(Debug, Serialize)]
+pub struct AccessLogListResponse {
+    pub logs: Vec<AccessLogResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
+    pub total_pages: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +463,8 @@ mod tests {
             last_heartbeat: Some(Utc::now()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            include_in_clash: false,
+            sort_order: 0,
         };
 
         let json = serde_json::to_string(&node).unwrap();
@@ -472,6 +531,8 @@ mod tests {
                 last_heartbeat: Some(Utc::now()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
+                include_in_clash: false,
+                sort_order: 0,
             };
 
             // Serialize to JSON (simulating database storage)
@@ -594,6 +655,8 @@ mod tests {
                 last_heartbeat: Some(Utc::now()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
+                include_in_clash: false,
+                sort_order: 0,
             };
 
             // Serialize the entire node

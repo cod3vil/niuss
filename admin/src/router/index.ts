@@ -50,6 +50,12 @@ const routes: RouteRecordRaw[] = [
         name: 'ClashConfig',
         component: () => import('@/views/ClashConfig.vue'),
         meta: { title: 'Clash 配置' }
+      },
+      {
+        path: 'access-logs',
+        name: 'AccessLogs',
+        component: () => import('@/views/AccessLogs.vue'),
+        meta: { title: '访问日志' }
       }
     ]
   },

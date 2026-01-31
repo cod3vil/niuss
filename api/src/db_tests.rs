@@ -309,6 +309,8 @@ mod tests {
             None,
             None,
             Some("online"),
+            None,
+            None,
         )
         .await
         .expect("Failed to update node");

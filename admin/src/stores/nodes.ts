@@ -16,6 +16,10 @@ export interface Node {
   last_heartbeat: string | null
   created_at: string
   updated_at: string
+  include_in_clash: boolean
+  sort_order: number
+  secret?: string
+  config?: any
 }
 
 export interface CreateNodeRequest {
@@ -26,6 +30,8 @@ export interface CreateNodeRequest {
   secret: string
   config: any
   max_users?: number
+  include_in_clash?: boolean
+  sort_order?: number
 }
 
 export const useNodesStore = defineStore('nodes', () => {
