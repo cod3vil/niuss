@@ -106,7 +106,7 @@ This implementation plan breaks down the Clash access logs feature into discrete
     - **Property 4: Response Status Recording**
     - **Validates: Requirements 2.2, 2.3, 2.4, 2.5**
 
-- [~] 7. Checkpoint - Ensure backend logging works
+- [ ] 7. Checkpoint - Ensure backend logging works
   - Run database migrations
   - Test subscription endpoint with various scenarios
   - Verify logs are created in database
@@ -202,7 +202,7 @@ This implementation plan breaks down the Clash access logs feature into discrete
     - Add "Access Logs" link to navigation menu
     - _Requirements: 4.1_
 
-- [~] 12. Final checkpoint - Integration testing
+- [ ] 12. Final checkpoint - Integration testing
   - Verify database migration has been applied
   - Run full application (backend + frontend)
   - Test subscription access logging from Clash client
