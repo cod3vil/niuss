@@ -1033,10 +1033,19 @@ async fn get_referral_stats_handler(
         .await
         .map_err(|e| ApiError::InternalServerError(format!("Failed to get referral stats: {}", e)))?;
 
+    // Get referral code (should always exist after registration)
+    let referral_code = user.referral_code
+        .ok_or_else(|| ApiError::InternalServerError("Referral code not found".to_string()))?;
+
+    // Construct referral link
+    let base_url = std::env::var("FRONTEND_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let referral_link = format!("{}/register?ref={}", base_url, referral_code);
+
     Ok(Json(json!({
         "referral_count": referral_count,
-        "total_rebate": total_rebate,
-        "referral_code": user.referral_code,
+        "total_commission": total_rebate,
+        "referral_link": referral_link,
     })))
 }
 
