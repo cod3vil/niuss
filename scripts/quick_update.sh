@@ -117,7 +117,7 @@ rebuild_images() {
     docker compose build api
     
     # 如果前端也有更新，取消注释以下行
-    # docker compose build frontend admin
+    docker compose build frontend admin
 }
 
 # 重启服务
