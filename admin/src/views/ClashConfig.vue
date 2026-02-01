@@ -4,7 +4,7 @@
     
     <a-alert
       message="代理管理已迁移"
-      description="代理管理功能已迁移至节点管理页面。请在节点页面使用"包含在 Clash 中"开关来控制哪些节点出现在 Clash 配置中。"
+      description="代理管理功能已迁移至节点管理页面。请在节点页面使用「包含在 Clash 中」开关来控制哪些节点出现在 Clash 配置中。"
       type="info"
       show-icon
       closable
